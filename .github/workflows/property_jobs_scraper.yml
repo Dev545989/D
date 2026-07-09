@@ -1,0 +1,383 @@
+name: Property & Jobs Scraper
+
+on:
+  workflow_dispatch:
+
+jobs:
+  detect_pages:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build_matrix.outputs.matrix }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Detect pages and build matrix
+        id: build_matrix
+        run: |
+          python << 'EOF'
+          import json
+          import os
+          import requests
+
+          URL = "https://wd0ptz13zs-dsn.algolia.net/1/indexes/*/queries"
+          PARAMS = {
+              "x-algolia-agent": "Algolia for JavaScript (4.24.0); Browser (lite)",
+              "x-algolia-api-key": "cdd839b4fdac840289e88633779e8634",
+              "x-algolia-application-id": "WD0PTZ13ZS",
+          }
+
+          CATEGORIES = {
+                "rent_residential": {
+                    "index": "property-for-rent-residential.com",
+                    "filter": '("category_v2.slug_paths":"property-for-rent/residential")',
+                    "hits": []
+                },
+                "rent_commercial": {
+                    "index": "property-for-rent-commercial.com",
+                    "filter": '("category_v2.slug_paths":"property-for-rent/commercial")',
+                    "hits": []
+                },
+                "rent_rooms_rent_flatmates": {
+                    "index": "property-for-rent-rooms-for-rent-flatmates.com",
+                    "filter": '("category_v2.slug_paths":"property-for-rent/rooms-for-rent-flatmates")',
+                    "hits": []
+                },
+                "rent_holiday_homes": {
+                    "index": "property-for-rent-holiday-homes.com",
+                    "filter": '("categories.slug_paths":"property-for-rent/holiday-homes")',
+                    "hits": []
+                },
+                "rent_short_term_daily": {
+                    "index": "property-for-rent-short-term-daily.com",
+                    "filter": '("category_v2.slug_paths":"property-for-rent/short-term-daily")',
+                    "hits": []
+                },
+                "sale_residential": {
+                    "index": "property-for-sale-residential.com",
+                    "filter": '("category_v2.slug_paths":"property-for-sale/residential")',
+                    "hits": []
+                },
+                "sale_commercial": {
+                    "index": "property-for-sale-commercial.com",
+                    "filter": '("category_v2.slug_paths":"property-for-sale/commercial")',
+                    "hits": []
+                },
+                "jobs": {
+                    "index": "by_added_desc_jobs.com",
+                    "filter": '("category_v2.slug_paths":"jobs")',
+                    "hits": []
+                },
+                "jobs_wanted": {
+                    "index": "by_added_desc_jobs-wanted.com",
+                    "filter": '("category_v2.slug_paths":"jobs-wanted")',
+                    "hits": []
+                }
+          }
+
+          PAGES_PER_JOB = 30
+
+          matrix = {"include": []}
+
+          for category_name, category in CATEGORIES.items():
+              print(f"Detecting pages for {category_name}...")
+              try:
+                  payload = {
+                      "requests": [{
+                          "indexName": category["index"],
+                          "query": "",
+                          "params": f"page=0&hitsPerPage=25&filters={category['filter']}",
+                      }]
+                  }
+                  r = requests.post(URL, params=PARAMS, json=payload, timeout=30)
+                  data = r.json()
+                  nb_pages = data["results"][0]["nbPages"]
+                  #nb_pages = 3
+                  print(f"  {category_name}: {nb_pages} pages")
+              except Exception as e:
+                  print(f"  Failed: {e}")
+                  continue
+
+              if nb_pages == 0:
+                  continue
+
+              for i in range(0, nb_pages, PAGES_PER_JOB):
+                  start = i
+                  end = min(i + PAGES_PER_JOB - 1, nb_pages - 1)
+                  matrix["include"].append({
+                      "category": category_name,
+                      "start": start,
+                      "end": end
+                  })
+
+          print(f"Total jobs: {len(matrix['include'])}")
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"matrix={json.dumps(matrix)}\n")
+          EOF
+
+  scrape:
+    runs-on: ubuntu-latest
+    needs: detect_pages
+    strategy:
+      matrix: ${{ fromJson(needs.detect_pages.outputs.matrix) }}
+      max-parallel: 10
+      fail-fast: false
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run scraper with retry
+        run: |
+          python -u main.py "${{ matrix.category }}" ${{ matrix.start }} ${{ matrix.end }}
+
+      - name: Upload raw data artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-${{ matrix.category }}-${{ matrix.start }}-${{ matrix.end }}
+          path: |
+            ${{ matrix.category }}_${{ matrix.start }}_${{ matrix.end }}.jsonl
+            ${{ matrix.category }}_${{ matrix.start }}_${{ matrix.end }}_failed.txt
+            ${{ matrix.category }}_${{ matrix.start }}_${{ matrix.end }}_result.json
+          if-no-files-found: ignore
+
+  merge:
+    runs-on: ubuntu-latest
+    needs: scrape
+
+    strategy:
+      max-parallel: 8
+      matrix:
+        category:
+          - rent_residential
+          - rent_commercial
+          - rent_rooms_rent_flatmates
+          - rent_holiday_homes
+          - rent_short_term_daily
+          - sale_residential
+          - sale_commercial
+          - jobs
+          - jobs_wanted     
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pandas openpyxl boto3 requests pillow python-dotenv
+
+      - name: Download raw data for ${{ matrix.category }}
+        uses: actions/download-artifact@v4
+        with:
+          pattern: raw-${{ matrix.category }}-*
+          merge-multiple: true
+          path: raw_parts/
+
+      - name: Process and upload to R2
+        env:
+          CF_R2_ACCESS_KEY_ID: ${{ secrets.CF_R2_ACCESS_KEY_ID }}
+          CF_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_R2_SECRET_ACCESS_KEY }}
+          CF_R2_ENDPOINT_URL: ${{ secrets.CF_R2_ENDPOINT_URL }}
+          CF_R2_BUCKET_NAME: ${{ secrets.CF_R2_BUCKET_NAME }}
+        run: |
+          python << 'EOF'
+          import glob
+          import os
+          import json
+          import boto3
+          import re
+          from datetime import datetime
+          from dub_writer import process_category
+
+          category = "${{ matrix.category }}"
+          jsonl_files = glob.glob('raw_parts/*.jsonl')
+
+          dt = datetime.now()
+          date_prefix = f"year={dt.year}/month={dt.strftime('%m')}/day={dt.strftime('%d')}"
+
+          client = boto3.client('s3',
+              endpoint_url=os.environ['CF_R2_ENDPOINT_URL'],
+              aws_access_key_id=os.environ['CF_R2_ACCESS_KEY_ID'],
+              aws_secret_access_key=os.environ['CF_R2_SECRET_ACCESS_KEY'],
+              region_name='auto'
+          )
+          bucket = os.environ['CF_R2_BUCKET_NAME']
+
+          if not jsonl_files:
+              print(f"No raw data found for {category}")
+              # Upload empty summary
+              r2_key = f"DUAE/{date_prefix}/{category}/summary/summary.txt"
+              summary_content = f"=== {category} ===\nStatus: NO DATA\nDate: {dt.strftime('%Y-%m-%d %H:%M:%S')}"
+              client.put_object(Bucket=bucket, Key=r2_key, Body=summary_content.encode('utf-8'), 
+                               ContentType='text/plain; charset=utf-8')
+              exit(0)
+
+          # Collect failed pages from result files
+          failed_pages = []
+          total_pages = 0
+          
+          for f in glob.glob('raw_parts/*.jsonl'):
+              # Extract start and end from filename
+              match = re.search(r'_(\d+)_(\d+)\.jsonl$', f)
+              if match:
+                  start = int(match.group(1))
+                  end = int(match.group(2))
+                  total_pages += (end - start + 1)
+              
+              # Read failed pages from accompanying file
+              failed_file = f.replace('.jsonl', '_failed.txt')
+              if os.path.exists(failed_file):
+                  with open(failed_file, 'r', encoding='utf-8') as ff:
+                      for line in ff:
+                          if line.startswith('page='):
+                              try:
+                                  page_num = int(line.split('=')[1])
+                                  failed_pages.append(page_num)
+                              except:
+                                  pass
+
+          # Calculate failure percentage
+          failed_percentage = (len(failed_pages) / total_pages * 100) if total_pages > 0 else 0
+
+          # Process data
+          output_base = "output"
+          result = process_category(category, jsonl_files, output_base, upload_images=True)
+
+          print(f"\nCategory: {category} | Total rows: {result['total']} | Excel files: {len(result['excel_files'])}")
+          print(f"Total Pages: {total_pages} | Failed Pages: {len(failed_pages)} | Failed: {failed_percentage:.2f}%")
+
+          # Upload Excel files with correct structure
+          for local_path in result["excel_files"]:
+              relative_path = os.path.relpath(local_path, output_base)
+              parts = relative_path.split(os.sep)
+              if len(parts) >= 4:
+                  city = parts[0]
+                  cat0 = parts[1]
+                  cat1 = parts[2]
+                  remaining_path = '/'.join(parts[4:]) if len(parts) > 4 else parts[3]
+                  r2_key = f"DUAE/{date_prefix}/{city}/{cat0}/{cat1}/excel/{remaining_path}"
+              else:
+                  r2_key = f"DUAE/{date_prefix}/{relative_path}"
+
+              client.upload_file(local_path, bucket, r2_key,
+                  ExtraArgs={'ContentType': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})
+              print(f"Uploaded Excel: {r2_key}")
+
+          # Upload JSON files with correct structure
+          for local_path in result["json_files"]:
+              relative_path = os.path.relpath(local_path, output_base)
+              parts = relative_path.split(os.sep)
+              if len(parts) >= 4:
+                  city = parts[0]
+                  cat0 = parts[1]
+                  cat1 = parts[2]
+                  remaining_path = '/'.join(parts[4:]) if len(parts) > 4 else parts[3]
+                  r2_key = f"DUAE/{date_prefix}/{city}/{cat0}/{cat1}/json/{remaining_path}"
+              else:
+                  r2_key = f"DUAE/{date_prefix}/{relative_path}"
+
+              client.upload_file(local_path, bucket, r2_key,
+                  ExtraArgs={'ContentType': 'application/json; charset=utf-8'})
+              print(f"Uploaded JSON: {r2_key}")
+
+          # Upload summary.txt files
+          for root, dirs, files in os.walk('output'):
+              for file in files:
+                  if file == 'summary.txt':
+                      local_path = os.path.join(root, file)
+                      relative_path = os.path.relpath(local_path, output_base)
+                      parts = relative_path.split(os.sep)
+                      if len(parts) >= 4:
+                          city = parts[0]
+                          cat0 = parts[1]
+                          cat1 = parts[2]
+                          r2_key = f"DUAE/{date_prefix}/{city}/{cat0}/{cat1}/summary/summary.txt"
+                          client.upload_file(local_path, bucket, r2_key,
+                              ExtraArgs={'ContentType': 'text/plain; charset=utf-8'})
+                          print(f"Uploaded summary: {r2_key}")
+
+
+          failed_content_lines = []
+          failed_content_lines.append(f"=== {category} ===\n")
+          failed_content_lines.append(f"Total Pages Attempted: {total_pages}\n")
+          failed_content_lines.append(f"Total Failed Pages: {len(failed_pages)}\n")
+          failed_content_lines.append(f"Failed Percentage: {failed_percentage:.2f}%\n")
+          failed_content_lines.append(f"Success Rate: {100 - failed_percentage:.2f}%\n")
+          failed_content_lines.append("\n" + "="*50 + "\n")
+          failed_content_lines.append("Failed Pages Details:\n")
+          failed_content_lines.append("="*50 + "\n")
+
+          if failed_pages:
+              failed_pages.sort()
+              failed_content_lines.append(f"Pages: {', '.join(map(str, failed_pages))}\n")
+              failed_content_lines.append("\nFailure Distribution:\n")
+
+              consecutive_groups = []
+              current_group = [failed_pages[0]]
+              for i in range(1, len(failed_pages)):
+                  if failed_pages[i] == failed_pages[i-1] + 1:
+                      current_group.append(failed_pages[i])
+                  else:
+                      consecutive_groups.append(current_group)
+                      current_group = [failed_pages[i]]
+              consecutive_groups.append(current_group)
+
+              for group in consecutive_groups:
+                  if len(group) == 1:
+                      failed_content_lines.append(f"  Page {group[0]}\n")
+                  else:
+                      failed_content_lines.append(f"  Pages {group[0]}-{group[-1]} (consecutive {len(group)} pages)\n")
+          else:
+              failed_content_lines.append("No failed pages! All pages scraped successfully.\n")
+
+          failed_content = "".join(failed_content_lines)
+          local_failed_file = f"failed_{category}.txt"
+          with open(local_failed_file, "w", encoding="utf-8") as f:
+              f.write(failed_content)
+
+          summary_groups = set()
+          for local_path in result["excel_files"]:
+              relative_path = os.path.relpath(local_path, output_base)
+              parts = relative_path.split(os.sep)
+              if len(parts) >= 3:
+                  city, cat0, cat1 = parts[0], parts[1], parts[2]
+                  summary_groups.add((city, cat0, cat1))
+
+          for city, cat0, cat1 in summary_groups:
+              r2_key = f"DUAE/{date_prefix}/{city}/{cat0}/{cat1}/summary/failed_pages_{category}.txt"
+              client.upload_file(local_failed_file, bucket, r2_key,
+                  ExtraArgs={'ContentType': 'text/plain; charset=utf-8'})
+              print(f"Uploaded: {r2_key}")
+
+          print(f"\nDONE: {len(result['excel_files'])} excel + {len(result['json_files'])} json files uploaded for {category}")
+          EOF
+
+      - name: Upload failed pages artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: failed-${{ matrix.category }}
+          path: raw_parts/*_failed.txt
+          if-no-files-found: ignore
