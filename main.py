@@ -3,7 +3,8 @@ import json
 import time
 import requests
 import random
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
 
 URL = "https://wd0ptz13zs-dsn.algolia.net/1/indexes/*/queries"
 
@@ -61,6 +62,28 @@ CATEGORIES = {
     }
 }
 
+TARGET_DATE = datetime.now(timezone.utc).date() - timedelta(days=1)
+
+def filter_yesterday_hits(hits):
+    filtered = []
+
+    for hit in hits:
+        created_at = hit.get("created_at")
+
+        if created_at is None:
+            continue
+
+        try:
+            dt = datetime.fromtimestamp(int(created_at), tz=timezone.utc)
+
+            if dt.date() == TARGET_DATE:
+                filtered.append(hit)
+
+        except (ValueError, TypeError):
+            pass
+
+    return filtered
+
 
 def get_page_with_retry(category: dict, page: int, max_retries: int = 3) -> dict:
     payload = {
@@ -117,6 +140,18 @@ def run(category_name: str, start_page: int, end_page: int, output_jsonl: str) -
                 break
 
             hits.extend(page_hits)
+
+            # page_hits = data["results"][0]["hits"]
+            # if not page_hits:
+            #     print(f"  Page {page} has no results, stopping...")
+            #     break
+            # filtered_hits = filter_yesterday_hits(page_hits)
+            # print(
+            #     f"  Page {page}: {len(page_hits)} listings "
+            #     f"-> kept {len(filtered_hits)}"
+            # )
+            # hits.extend(filtered_hits)
+
             delay = random.uniform(0.5, 2.5)
             print(f"  Waiting {delay:.2f}s before next request...")
             time.sleep(delay)
