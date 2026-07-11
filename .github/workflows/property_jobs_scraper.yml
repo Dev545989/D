@@ -338,16 +338,16 @@ jobs:
               f.write(failed_content)
 
           summary_groups = set()
-            for local_path in result["excel_files"]:
-                relative_path = os.path.relpath(local_path, output_base)
-                parts = relative_path.replace(os.sep, '/').split('/')
-                hierarchy = "/".join(parts[:-2])
-                summary_groups.add(hierarchy)
+          for local_path in result["excel_files"]:
+            relative_path = os.path.relpath(local_path, output_base)
+            parts = relative_path.replace(os.sep, '/').split('/')
+            hierarchy = "/".join(parts[:-2])
+            summary_groups.add(hierarchy)
 
-            for hierarchy in summary_groups:
-                r2_key = f"DUAE/{date_prefix}/{hierarchy}/summary/failed_pages_{category}.txt"
-                client.upload_file(local_failed_file, bucket, r2_key,
-                    ExtraArgs={'ContentType': 'text/plain; charset=utf-8'})
+          for hierarchy in summary_groups:
+            r2_key = f"DUAE/{date_prefix}/{hierarchy}/summary/failed_pages_{category}.txt"
+            client.upload_file(local_failed_file, bucket, r2_key,
+                ExtraArgs={'ContentType': 'text/plain; charset=utf-8'})
                 print(f"Uploaded: {r2_key}")
 
           print(f"\nDONE: {len(result['excel_files'])} excel + {len(result['json_files'])} json files uploaded for {category}")
