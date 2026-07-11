@@ -271,53 +271,32 @@ jobs:
 
           # Upload Excel files with correct structure
           for local_path in result["excel_files"]:
-              relative_path = os.path.relpath(local_path, output_base)
-              parts = relative_path.split(os.sep)
-              if len(parts) >= 4:
-                  city = parts[0]
-                  cat0 = parts[1]
-                  cat1 = parts[2]
-                  remaining_path = '/'.join(parts[4:]) if len(parts) > 4 else parts[3]
-                  r2_key = f"DUAE/{date_prefix}/{city}/{cat0}/{cat1}/excel/{remaining_path}"
-              else:
-                  r2_key = f"DUAE/{date_prefix}/{relative_path}"
+            relative_path = os.path.relpath(local_path, output_base)
+            r2_key = f"DUAE/{date_prefix}/{relative_path.replace(os.sep, '/')}"
 
-              client.upload_file(local_path, bucket, r2_key,
-                  ExtraArgs={'ContentType': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})
-              print(f"Uploaded Excel: {r2_key}")
+            client.upload_file(local_path, bucket, r2_key,
+                ExtraArgs={'ContentType': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})
+            print(f"Uploaded Excel: {r2_key}")
 
           # Upload JSON files with correct structure
           for local_path in result["json_files"]:
-              relative_path = os.path.relpath(local_path, output_base)
-              parts = relative_path.split(os.sep)
-              if len(parts) >= 4:
-                  city = parts[0]
-                  cat0 = parts[1]
-                  cat1 = parts[2]
-                  remaining_path = '/'.join(parts[4:]) if len(parts) > 4 else parts[3]
-                  r2_key = f"DUAE/{date_prefix}/{city}/{cat0}/{cat1}/json/{remaining_path}"
-              else:
-                  r2_key = f"DUAE/{date_prefix}/{relative_path}"
+            relative_path = os.path.relpath(local_path, output_base)
+            r2_key = f"DUAE/{date_prefix}/{relative_path.replace(os.sep, '/')}"
 
-              client.upload_file(local_path, bucket, r2_key,
-                  ExtraArgs={'ContentType': 'application/json; charset=utf-8'})
-              print(f"Uploaded JSON: {r2_key}")
+            client.upload_file(local_path, bucket, r2_key,
+                ExtraArgs={'ContentType': 'application/json; charset=utf-8'})
+            print(f"Uploaded JSON: {r2_key}")
 
           # Upload summary.txt files
           for root, dirs, files in os.walk('output'):
-              for file in files:
-                  if file == 'summary.txt':
-                      local_path = os.path.join(root, file)
-                      relative_path = os.path.relpath(local_path, output_base)
-                      parts = relative_path.split(os.sep)
-                      if len(parts) >= 4:
-                          city = parts[0]
-                          cat0 = parts[1]
-                          cat1 = parts[2]
-                          r2_key = f"DUAE/{date_prefix}/{city}/{cat0}/{cat1}/summary/summary.txt"
-                          client.upload_file(local_path, bucket, r2_key,
-                              ExtraArgs={'ContentType': 'text/plain; charset=utf-8'})
-                          print(f"Uploaded summary: {r2_key}")
+            for file in files:
+                if file == 'summary.txt':
+                    local_path = os.path.join(root, file)
+                    relative_path = os.path.relpath(local_path, output_base)
+                    r2_key = f"DUAE/{date_prefix}/{relative_path.replace(os.sep, '/')}"
+                    client.upload_file(local_path, bucket, r2_key,
+                        ExtraArgs={'ContentType': 'text/plain; charset=utf-8'})
+                    print(f"Uploaded summary: {r2_key}")
 
 
           failed_content_lines = []
@@ -359,18 +338,17 @@ jobs:
               f.write(failed_content)
 
           summary_groups = set()
-          for local_path in result["excel_files"]:
-              relative_path = os.path.relpath(local_path, output_base)
-              parts = relative_path.split(os.sep)
-              if len(parts) >= 3:
-                  city, cat0, cat1 = parts[0], parts[1], parts[2]
-                  summary_groups.add((city, cat0, cat1))
+            for local_path in result["excel_files"]:
+                relative_path = os.path.relpath(local_path, output_base)
+                parts = relative_path.replace(os.sep, '/').split('/')
+                hierarchy = "/".join(parts[:-2])
+                summary_groups.add(hierarchy)
 
-          for city, cat0, cat1 in summary_groups:
-              r2_key = f"DUAE/{date_prefix}/{city}/{cat0}/{cat1}/summary/failed_pages_{category}.txt"
-              client.upload_file(local_failed_file, bucket, r2_key,
-                  ExtraArgs={'ContentType': 'text/plain; charset=utf-8'})
-              print(f"Uploaded: {r2_key}")
+            for hierarchy in summary_groups:
+                r2_key = f"DUAE/{date_prefix}/{hierarchy}/summary/failed_pages_{category}.txt"
+                client.upload_file(local_failed_file, bucket, r2_key,
+                    ExtraArgs={'ContentType': 'text/plain; charset=utf-8'})
+                print(f"Uploaded: {r2_key}")
 
           print(f"\nDONE: {len(result['excel_files'])} excel + {len(result['json_files'])} json files uploaded for {category}")
           EOF
