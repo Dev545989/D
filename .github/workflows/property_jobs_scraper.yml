@@ -348,7 +348,7 @@ jobs:
             r2_key = f"DUAE/{date_prefix}/{hierarchy}/summary/failed_pages_{category}.txt"
             client.upload_file(local_failed_file, bucket, r2_key,
                 ExtraArgs={'ContentType': 'text/plain; charset=utf-8'})
-                print(f"Uploaded: {r2_key}")
+            print(f"Uploaded: {r2_key}")
 
           print(f"\nDONE: {len(result['excel_files'])} excel + {len(result['json_files'])} json files uploaded for {category}")
           EOF
