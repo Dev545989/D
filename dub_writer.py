@@ -279,7 +279,7 @@ def process_category(category_name: str, jsonl_files: list, output_base_dir: str
         city, cat0, cat1, filename = keys
         safe_city = sanitize_name(city)
         safe_cat0 = sanitize_name(cat0)
-        safe_cat1 = sanitize_name(cat1) if cat1 else None
+        safe_cat1 = sanitize_name(cat1) if pd.notna(cat1) and cat1 else None
         safe_filename = sanitize_name(filename)
 
         group_quality_report = generate_data_quality_report(group_df, len(group_df))
