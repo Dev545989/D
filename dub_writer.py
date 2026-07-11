@@ -275,7 +275,7 @@ def process_category(category_name: str, jsonl_files: list, output_base_dir: str
     has_image_column = "photo_mains" in df.columns or "photos" in df.columns
     should_process_images = upload_images and has_image_column and category_name not in NO_IMAGE_CATEGORIES
 
-    for keys, group_df in df.groupby(group_cols):
+    for keys, group_df in df.groupby(group_cols, dropna=False):
         city, cat0, cat1, filename = keys
         safe_city = sanitize_name(city)
         safe_cat0 = sanitize_name(cat0)
