@@ -213,12 +213,11 @@ def process_images_for_group(df: pd.DataFrame, category: str, city: str, cat0: s
     return df
 
 
-def _write_excel_and_json(sheets: dict, xlsx_path: str) -> tuple:
+def _write_excel_and_json(sheets: dict, xlsx_path: str, json_path: str) -> tuple:
     with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
         for sheet_name, df in sheets.items():
             df.to_excel(writer, sheet_name=sheet_name, index=False)
 
-    json_path = xlsx_path.replace(".xlsx", ".json")
     all_records = []
     for sheet_name, df in sheets.items():
         records = df.to_dict(orient="records")
@@ -305,7 +304,8 @@ def process_category(category_name: str, jsonl_files: list, output_base_dir: str
         os.makedirs(summary_dir, exist_ok=True)
 
         main_xlsx = os.path.join(excel_dir, f"{safe_filename}.xlsx")
-
+        main_json = os.path.join(json_dir, f"{safe_filename}.json")
+        
         cols_to_drop = ["_city", "_cat0", "_cat1", "_filename", "_sheet", "_names_en"]
         sheets = {}
         for sheet_name, sdf in group_df.groupby("_sheet"):
@@ -313,7 +313,11 @@ def process_category(category_name: str, jsonl_files: list, output_base_dir: str
             safe_sheet = sanitize_name(sheet_name)[:31]
             sheets[safe_sheet] = sdf_clean
 
-        xlsx_path, json_path = _write_excel_and_json(sheets, main_xlsx)
+        xlsx_path, json_path = _write_excel_and_json(
+            sheets,
+            main_xlsx,
+            main_json
+        )
         excel_files.append(xlsx_path)
         json_files.append(json_path)
         print(f"  Saved: {main_xlsx} ({len(group_df)} rows)")
