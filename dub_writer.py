@@ -17,6 +17,7 @@ PROPERTY_CATEGORIES = {
 }
 
 JOB_CATEGORIES = {"jobs", "jobs_wanted"}
+NO_IMAGE_CATEGORIES = {"jobs", "jobs_wanted"}
 
 
 def parse_dict_field(value):
@@ -35,7 +36,19 @@ def parse_dict_field(value):
 
 def get_city_name(site_value) -> str:
     site = parse_dict_field(site_value)
-    return site.get("en", "Unknown")
+    if not site:
+        return "Unknown"
+
+    if "en" in site:
+        return site.get("en", "Unknown")
+
+    name_field = site.get("name")
+    if isinstance(name_field, dict):
+        return name_field.get("en", "Unknown")
+    if isinstance(name_field, str):
+        return name_field
+
+    return "Unknown"
 
 
 def get_category_names(category_v2_value) -> list:
@@ -50,15 +63,12 @@ def sanitize_name(name: str) -> str:
 
 
 def build_property_meta(names_en: list, category_name: str) -> dict:
-    """
-    names_en = [leaf, mid, top] زي ['Villa', 'Residential', 'Property for Rent']
-    """
     if len(names_en) < 2:
         return {"cat0": "Property", "cat1": "Other", "filename": category_name, "sheet": "Other"}
 
     leaf = names_en[0]
     mid = names_en[1]
-    top = names_en[-1]  # "Property for Rent" أو "Property for Sale"
+    top = names_en[-1]
 
     sheet = f"{mid} ({leaf})"
 
@@ -66,9 +76,6 @@ def build_property_meta(names_en: list, category_name: str) -> dict:
 
 
 def build_job_meta(names_en: list, category_name: str) -> dict:
-    """
-    names_en = [top, mid, leaf?] زي ['Jobs', 'Design', 'Graphic Designer']
-    """
     if not names_en:
         return {"cat0": category_name, "cat1": None, "filename": category_name, "sheet": "Other"}
 
@@ -82,6 +89,20 @@ def build_job_meta(names_en: list, category_name: str) -> dict:
         sheet = "Other"
 
     return {"cat0": top, "cat1": None, "filename": top, "sheet": sheet}
+
+
+def extract_image_urls(row: pd.Series) -> list:
+    if "photo_mains" in row and isinstance(row["photo_mains"], list):
+        return row["photo_mains"]
+
+    if "photos" in row and isinstance(row["photos"], list):
+        urls = []
+        for item in row["photos"]:
+            if isinstance(item, dict) and item.get("main"):
+                urls.append(item["main"])
+        return urls
+
+    return []
 
 
 def generate_data_quality_report(df: pd.DataFrame, total_rows: int) -> str:
@@ -167,7 +188,7 @@ def process_images_for_group(df: pd.DataFrame, category: str, city: str, cat0: s
 
     tasks = []
     for pos, (idx, row) in enumerate(df.iterrows()):
-        images = row.get("photo_mains", [])
+        images = extract_image_urls(row)
         id_prod = str(row.get("id", idx))
         tasks.append((pos, images, id_prod))
 
@@ -251,6 +272,9 @@ def process_category(category_name: str, jsonl_files: list, output_base_dir: str
 
     group_cols = ["_city", "_cat0", "_cat1", "_filename"]
 
+    has_image_column = "photo_mains" in df.columns or "photos" in df.columns
+    should_process_images = upload_images and has_image_column and category_name not in NO_IMAGE_CATEGORIES
+
     for keys, group_df in df.groupby(group_cols):
         city, cat0, cat1, filename = keys
         safe_city = sanitize_name(city)
@@ -266,7 +290,7 @@ def process_category(category_name: str, jsonl_files: list, output_base_dir: str
             group_dir = os.path.join(output_base_dir, safe_city, safe_cat0)
         os.makedirs(group_dir, exist_ok=True)
 
-        if upload_images and "photo_mains" in group_df.columns:
+        if should_process_images:
             print(f"  Processing images for {safe_city}/{safe_cat0}/{safe_cat1 or ''} ({len(group_df)} listings)...")
             group_df = process_images_for_group(
                 group_df, category=category_name, city=safe_city,
