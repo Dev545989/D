@@ -45,7 +45,7 @@ def build_r2_key(folder_name: str, category: str, file_type: str, filename: str,
 
     if city and category_display:
         if file_type:
-            return f"{folder_name}/{year}/{month}/{day}/{city}/{category_display}/{file_type}/{filename}"
+            return f"{folder_name}/{year}/{month}/{day}/{city}/{category_display}/{category}/{file_type}/{filename}"
         else:
             return f"{folder_name}/{year}/{month}/{day}/{city}/{category_display}/{filename}"
 
