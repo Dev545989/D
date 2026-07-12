@@ -372,8 +372,7 @@ jobs:
           )
           bucket = os.environ['CF_R2_BUCKET_NAME']
 
-          # كل batch اتنزل في فولدر منفصل: batches/batch-{category}-{idx}/output/...
-          batch_dirs = glob.glob(f'batches/batch-{category}-*/output')
+          batch_dirs = glob.glob(f'batches/batch-{category}-*')
 
           if not batch_dirs:
               print(f"No batches found for {category}")
