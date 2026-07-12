@@ -19,6 +19,10 @@ PROPERTY_CATEGORIES = {
 JOB_CATEGORIES = {"jobs", "jobs_wanted"}
 NO_IMAGE_CATEGORIES = {"jobs", "jobs_wanted"}
 
+COLUMNS_TO_DROP = ["tag_slugs", "category", "category_slug_tree", "category_tree", "categories_v2",
+                  "site_categories_slug_tree", "permalink", "short_url", "short_url_v2",
+                  "rent_is_paid", "_highlightResult", "categories"]
+
 
 def parse_dict_field(value):
     if isinstance(value, dict):
@@ -137,7 +141,14 @@ def load_all_hits(jsonl_files: list) -> pd.DataFrame:
                 line = line.strip()
                 if line:
                     rows.append(json.loads(line))
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+
+    existing_cols = [c for c in COLUMNS_TO_DROP if c in df.columns]
+    if existing_cols:
+        df = df.drop(columns=existing_cols)
+        print(f"  Dropped columns: {existing_cols}")
+
+    return df
 
 
 def download_images(images: list, id_prod: str = "", category: str = "",
