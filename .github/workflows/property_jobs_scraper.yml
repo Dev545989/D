@@ -217,6 +217,8 @@ jobs:
               if nb_pages == 0:
                   continue
 
+              nb_pages = 2
+
               n_batches = math.ceil(nb_pages / PAGES_PER_BATCH)
               print(f"{category_name}: {nb_pages} pages -> {n_batches} batches")
 
