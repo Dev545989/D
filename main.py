@@ -68,13 +68,16 @@ def filter_yesterday_hits(hits):
     filtered = []
 
     for hit in hits:
-        created_at = hit.get("created_at")
+        timestamp_value = hit.get("created_at")
 
-        if created_at is None:
+        if timestamp_value is None:
+            timestamp_value = hit.get("added")
+
+        if timestamp_value is None:
             continue
 
         try:
-            dt = datetime.fromtimestamp(int(created_at), tz=timezone.utc)
+            dt = datetime.fromtimestamp(int(timestamp_value), tz=timezone.utc)
 
             if dt.date() == TARGET_DATE:
                 filtered.append(hit)
@@ -132,25 +135,25 @@ def run(category_name: str, start_page: int, end_page: int, output_jsonl: str) -
             continue
 
         try:
-            page_hits = data["results"][0]["hits"]
-            print(f"  Page {page}: {len(page_hits)} listings")
-
-            if not page_hits:
-                print(f"  Page {page} has no results, stopping...")
-                break
-
-            hits.extend(page_hits)
-
             # page_hits = data["results"][0]["hits"]
+            # print(f"  Page {page}: {len(page_hits)} listings")
+
             # if not page_hits:
             #     print(f"  Page {page} has no results, stopping...")
             #     break
-            # filtered_hits = filter_yesterday_hits(page_hits)
-            # print(
-            #     f"  Page {page}: {len(page_hits)} listings "
-            #     f"-> kept {len(filtered_hits)}"
-            # )
-            # hits.extend(filtered_hits)
+
+            # hits.extend(page_hits)
+
+            page_hits = data["results"][0]["hits"]
+            if not page_hits:
+                print(f"  Page {page} has no results, stopping...")
+                break
+            filtered_hits = filter_yesterday_hits(page_hits)
+            print(
+                f"  Page {page}: {len(page_hits)} listings "
+                f"-> kept {len(filtered_hits)}"
+            )
+            hits.extend(filtered_hits)
 
             delay = random.uniform(0.5, 2.5)
             print(f"  Waiting {delay:.2f}s before next request...")
