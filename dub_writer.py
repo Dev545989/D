@@ -59,7 +59,8 @@ def get_category_names(category_v2_value) -> list:
 def sanitize_name(name: str) -> str:
     name = re.sub(r'[<>:"/\\|?*]', "_", str(name))
     name = name.replace(" ", "_")
-    return name.strip()
+    name = re.sub(r'_+', '_', name)
+    return name.strip("_")            
 
 
 def build_property_meta(names_en: list, category_name: str) -> dict:
@@ -328,7 +329,7 @@ def process_category(category_name: str, jsonl_files: list, output_base_dir: str
         sheets = {}
         for sheet_name, sdf in group_df.groupby("_sheet"):
             sdf_clean = sdf.drop(columns=[c for c in cols_to_drop if c in sdf.columns])
-            safe_sheet = sanitize_name(sheet_name)[:31]
+            safe_sheet = sanitize_name(sheet_name)
             sheets[safe_sheet] = sdf_clean
 
         xlsx_path, json_path = _write_excel_and_json(
