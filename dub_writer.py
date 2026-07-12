@@ -64,7 +64,8 @@ def sanitize_name(name: str) -> str:
 
 def build_property_meta(names_en: list, category_name: str) -> dict:
     if len(names_en) < 2:
-        return {"cat0": "Property", "cat1": "Other", "filename": category_name, "sheet": "Other"}
+        return {"cat0": "Property", "cat1": "Other", "filename": category_name,
+                "sheet": "Other", "extra_folder": category_name}
 
     leaf = names_en[0]
     mid = names_en[1]
@@ -72,12 +73,19 @@ def build_property_meta(names_en: list, category_name: str) -> dict:
 
     sheet = f"{mid} ({leaf})"
 
-    return {"cat0": "Property", "cat1": top, "filename": category_name, "sheet": sheet}
+    return {
+        "cat0": "Property",
+        "cat1": top,
+        "filename": category_name,
+        "sheet": sheet,
+        "extra_folder": category_name 
+    }
 
 
 def build_job_meta(names_en: list, category_name: str) -> dict:
     if not names_en:
-        return {"cat0": category_name, "cat1": None, "filename": category_name, "sheet": "Other"}
+        return {"cat0": category_name, "cat1": None, "filename": category_name,
+                "sheet": "Other", "extra_folder": None}
 
     top = names_en[0]
 
@@ -88,7 +96,13 @@ def build_job_meta(names_en: list, category_name: str) -> dict:
     else:
         sheet = "Other"
 
-    return {"cat0": top, "cat1": None, "filename": top, "sheet": sheet}
+    return {
+        "cat0": top,
+        "cat1": None,
+        "filename": top,
+        "sheet": sheet,
+        "extra_folder": None
+    }
 
 
 def extract_image_urls(row: pd.Series) -> list:
@@ -261,6 +275,7 @@ def process_category(category_name: str, jsonl_files: list, output_base_dir: str
     df["_cat1"] = meta_list.apply(lambda m: m["cat1"])
     df["_filename"] = meta_list.apply(lambda m: m["filename"])
     df["_sheet"] = meta_list.apply(lambda m: m["sheet"])
+    df["_extra_folder"] = meta_list.apply(lambda m: m["extra_folder"])
 
     if "id" in df.columns:
         df = df.drop_duplicates(subset=["id"], keep="first")
@@ -269,24 +284,27 @@ def process_category(category_name: str, jsonl_files: list, output_base_dir: str
     json_files = []
     total = len(df)
 
-    group_cols = ["_city", "_cat0", "_cat1", "_filename"]
-
+    group_cols = ["_city", "_cat0", "_cat1", "_filename", "_extra_folder"]
     has_image_column = "photo_mains" in df.columns or "photos" in df.columns
     should_process_images = upload_images and has_image_column and category_name not in NO_IMAGE_CATEGORIES
 
     for keys, group_df in df.groupby(group_cols, dropna=False):
-        city, cat0, cat1, filename = keys
+        city, cat0, cat1, filename, extra_folder = keys
         safe_city = sanitize_name(city)
         safe_cat0 = sanitize_name(cat0)
         safe_cat1 = sanitize_name(cat1) if pd.notna(cat1) and cat1 else None
         safe_filename = sanitize_name(filename)
+        safe_extra_folder = sanitize_name(extra_folder) if pd.notna(extra_folder) and extra_folder else None
 
         group_quality_report = generate_data_quality_report(group_df, len(group_df))
 
+        path_parts = [output_base_dir, safe_city, safe_cat0]
         if safe_cat1:
-            group_dir = os.path.join(output_base_dir, safe_city, safe_cat0, safe_cat1)
-        else:
-            group_dir = os.path.join(output_base_dir, safe_city, safe_cat0)
+            path_parts.append(safe_cat1)
+        if safe_extra_folder:
+            path_parts.append(safe_extra_folder)
+
+        group_dir = os.path.join(*path_parts)
         os.makedirs(group_dir, exist_ok=True)
 
         if should_process_images:
@@ -306,7 +324,7 @@ def process_category(category_name: str, jsonl_files: list, output_base_dir: str
         main_xlsx = os.path.join(excel_dir, f"{safe_filename}.xlsx")
         main_json = os.path.join(json_dir, f"{safe_filename}.json")
         
-        cols_to_drop = ["_city", "_cat0", "_cat1", "_filename", "_sheet", "_names_en"]
+        cols_to_drop = ["_city", "_cat0", "_cat1", "_filename", "_sheet", "_names_en", "_extra_folder"]
         sheets = {}
         for sheet_name, sdf in group_df.groupby("_sheet"):
             sdf_clean = sdf.drop(columns=[c for c in cols_to_drop if c in sdf.columns])
