@@ -292,7 +292,6 @@ jobs:
           import glob
           import re
           from dub_writer import process_category
-          from request_tracker import tracker
 
           category = "${{ matrix.category }}"
           page_start = int("${{ matrix.page_start }}")
@@ -316,12 +315,6 @@ jobs:
           output_base = "output"
           result = process_category(category, batch_jsonl, output_base, upload_images=True)
           print(f"Batch processed: {result['total']} rows | {len(result['excel_files'])} excel files")
-
-          import os
-          stats_file = os.path.join(output_base, f"_batch_request_stats_{page_start}_{page_end}.json")
-          stats = tracker.save(stats_file)
-          print(f"\n--- Batch Request Stats ---")
-          print(f"Total: {stats['total_requests']} req | {stats['total_req_per_min']} req/min")
           EOF
 
       - name: Upload batch artifact
