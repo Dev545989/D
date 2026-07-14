@@ -109,7 +109,7 @@ def get_page_with_retry(category: dict, page: int, max_retries: int = 3) -> dict
         "requests": [{
             "indexName": category["index"],
             "query": "",
-            "params": f"page={page}&hitsPerPage=25&filters={category['filter']}",
+            "params": f"page={page}&hitsPerPage=35&filters={category['filter']}",
         }]
     }
 
