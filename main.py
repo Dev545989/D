@@ -4,7 +4,7 @@ import time
 import requests
 import random
 from datetime import datetime, timezone, timedelta
-
+import pandas as pd
 
 URL = "https://wd0ptz13zs-dsn.algolia.net/1/indexes/*/queries"
 
@@ -35,6 +35,11 @@ CATEGORIES = {
         "filter": '("categories.slug_paths":"property-for-rent/holiday-homes")',
         "hits": []
     },
+    "rent_short_term_monthly": {
+        "index": "property-for-rent-short-term.com",
+        "filter": '("categories_v2.slug_paths":"property-for-rent/short-term")',
+        "hits": []
+    },
     "rent_short_term_daily": {
         "index": "property-for-rent-short-term-daily.com",
         "filter": '("category_v2.slug_paths":"property-for-rent/short-term-daily")',
@@ -48,6 +53,16 @@ CATEGORIES = {
     "sale_commercial": {
         "index": "property-for-sale-commercial.com",
         "filter": '("category_v2.slug_paths":"property-for-sale/commercial")',
+        "hits": []
+    },
+    "sale_land": {
+        "index": "property-for-sale-land.com",
+        "filter": '("categories_v2.slug_paths":"property-for-sale/land")',
+        "hits": []
+    },
+    "sale_multiple_units": {
+        "index": "property-for-sale-multiple-units.com",
+        "filter": '("categories_v2.slug_paths":"property-for-sale/multiple-units")',
         "hits": []
     },
     "jobs": {
@@ -166,6 +181,9 @@ def run(category_name: str, start_page: int, end_page: int, output_jsonl: str) -
     with open(output_jsonl, "w", encoding="utf-8") as f:
         for hit in hits:
             f.write(json.dumps(hit, ensure_ascii=False) + "\n")
+
+    # df = pd.DataFrame(hits)
+    # df.to_csv('outputs.csv', index=False)
 
     if failed_pages:
         failed_file = output_jsonl.replace(".jsonl", "_failed.txt")
