@@ -44,15 +44,22 @@ def get_city_name(site_value) -> str:
         return "Unknown"
 
     if "en" in site:
-        return site.get("en", "Unknown")
+        city = site.get("en", "Unknown")
+    else:
+        name_field = site.get("name")
+        if isinstance(name_field, dict):
+            city = name_field.get("en", "Unknown")
+        elif isinstance(name_field, str):
+            city = name_field
+        else:
+            city = "Unknown"
 
-    name_field = site.get("name")
-    if isinstance(name_field, dict):
-        return name_field.get("en", "Unknown")
-    if isinstance(name_field, str):
-        return name_field
+    CITY_MAPPING = {
+        "Ras al Khaimah": "Ras Al Khaimah",
+        "Umm al Quwain": "Umm Al Quwain",
+    }
 
-    return "Unknown"
+    return CITY_MAPPING.get(city, city)
 
 
 def get_category_names(category_v2_value) -> list:
@@ -299,8 +306,8 @@ def _process_category_internal(category_name: str, df: pd.DataFrame, output_base
     df["_cat1"] = meta_list.apply(lambda m: m["cat1"])
     df["_sheet"] = meta_list.apply(lambda m: m["sheet"])
 
-    df["_filename"] = category_name
-    df["_extra_folder"] = category_name
+    df["_filename"] = meta_list.apply(lambda m: m["filename"])
+    df["_extra_folder"] = meta_list.apply(lambda m: m["extra_folder"])
 
     if "id" in df.columns:
         df = df.drop_duplicates(subset=["id"], keep="first")

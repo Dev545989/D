@@ -394,12 +394,8 @@ jobs:
           batch_dirs = glob.glob(f'batches/batch-{category}-*')
 
           if not batch_dirs:
-              print(f"No batches found for {category}")
-              r2_key = f"DUAE/{date_prefix}/{category}/summary/summary.txt"
-              content = f"=== {category} ===\nStatus: NO DATA\nDate: {dt.strftime('%Y-%m-%d %H:%M:%S')}"
-              client.put_object(Bucket=bucket, Key=r2_key, Body=content.encode('utf-8'),
-                               ContentType='text/plain; charset=utf-8')
-              exit(0)
+            print(f"No batches found for {category}, skipping upload.")
+            exit(0)
 
           excel_groups = defaultdict(list)   # relative_path -> [full_path1, full_path2, ...]
 
