@@ -5,7 +5,7 @@ import requests
 import random
 from datetime import datetime, timezone, timedelta
 from request_tracker import tracker
-import pandas as pd
+#import pandas as pd
 
 URL = "https://wd0ptz13zs-dsn.algolia.net/1/indexes/*/queries"
 
