@@ -150,6 +150,26 @@ def load_all_hits(jsonl_files: list) -> pd.DataFrame:
 
     return df
 
+OFF_PLAN_SOURCE_CATEGORY = "sale_residential"
+OFF_PLAN_STATUS_VALUE = "off_plan"
+
+
+def split_off_plan(df: pd.DataFrame) -> dict:
+    if "completion_status" not in df.columns:
+        print(f"  ⚠️ Column 'completion_status' not found, skipping off_plan split.")
+        return {"sale_residential": df}
+
+    is_off_plan = df["completion_status"] == OFF_PLAN_STATUS_VALUE
+
+    off_plan_df = df[is_off_plan].copy()
+    rest_df = df[~is_off_plan].copy()
+
+    print(f"  Split sale_residential: off_plan={len(off_plan_df)}, rest={len(rest_df)}")
+
+    return {
+        "off_plan": off_plan_df,
+        "sale_residential": rest_df,
+    }
 
 def download_images(images: list, id_prod: str = "", category: str = "",
                      city: str = "", cat0: str = "", cat1: str = None) -> list:
@@ -257,44 +277,36 @@ def _write_excel_and_json(sheets: dict, xlsx_path: str, json_path: str) -> tuple
     return xlsx_path, json_path
 
 
-def process_category(category_name: str, jsonl_files: list, output_base_dir: str,
-                      upload_images: bool = True, image_workers: int = 4,
-                      city_filter: str = None) -> dict:
-    df = load_all_hits(jsonl_files)
+def _process_category_internal(category_name: str, df: pd.DataFrame, output_base_dir: str,
+                                 upload_images: bool, image_workers: int) -> dict:
     if df.empty:
-        return {"total": 0, "excel_files": [], "json_files": []}
-
-    df["_city"] = df["site"].apply(get_city_name)
-
-    if city_filter:
-        df = df[df["_city"] == city_filter]
-        print(f"  Filtered to city: {city_filter} ({len(df)} rows)")
-        if df.empty:
-            return {"total": 0, "excel_files": [], "json_files": []}
+        return {"excel_files": [], "json_files": []}
 
     df["_names_en"] = df["category_v2"].apply(get_category_names)
 
-    if category_name in PROPERTY_CATEGORIES:
+    if category_name in PROPERTY_CATEGORIES or category_name == "off_plan":
         meta_fn = build_property_meta
+        meta_category_name = "sale_residential" if category_name == "off_plan" else category_name
     elif category_name in JOB_CATEGORIES:
         meta_fn = build_job_meta
+        meta_category_name = category_name
     else:
         print(f"  ⚠️ Unknown category family for '{category_name}', skipping.")
-        return {"total": 0, "excel_files": [], "json_files": []}
+        return {"excel_files": [], "json_files": []}
 
-    meta_list = df["_names_en"].apply(lambda n: meta_fn(n, category_name))
+    meta_list = df["_names_en"].apply(lambda n: meta_fn(n, meta_category_name))
     df["_cat0"] = meta_list.apply(lambda m: m["cat0"])
     df["_cat1"] = meta_list.apply(lambda m: m["cat1"])
-    df["_filename"] = meta_list.apply(lambda m: m["filename"])
     df["_sheet"] = meta_list.apply(lambda m: m["sheet"])
-    df["_extra_folder"] = meta_list.apply(lambda m: m["extra_folder"])
+
+    df["_filename"] = category_name
+    df["_extra_folder"] = category_name
 
     if "id" in df.columns:
         df = df.drop_duplicates(subset=["id"], keep="first")
 
     excel_files = []
     json_files = []
-    total = len(df)
 
     group_cols = ["_city", "_cat0", "_cat1", "_filename", "_extra_folder"]
     has_image_column = "photo_mains" in df.columns or "photos" in df.columns
@@ -335,7 +347,7 @@ def process_category(category_name: str, jsonl_files: list, output_base_dir: str
 
         main_xlsx = os.path.join(excel_dir, f"{safe_filename}.xlsx")
         main_json = os.path.join(json_dir, f"{safe_filename}.json")
-        
+
         cols_to_drop = ["_city", "_cat0", "_cat1", "_filename", "_sheet", "_names_en", "_extra_folder"]
         sheets = {}
         for sheet_name, sdf in group_df.groupby("_sheet"):
@@ -343,11 +355,7 @@ def process_category(category_name: str, jsonl_files: list, output_base_dir: str
             safe_sheet = sanitize_name(sheet_name)
             sheets[safe_sheet] = sdf_clean
 
-        xlsx_path, json_path = _write_excel_and_json(
-            sheets,
-            main_xlsx,
-            main_json
-        )
+        xlsx_path, json_path = _write_excel_and_json(sheets, main_xlsx, main_json)
         excel_files.append(xlsx_path)
         json_files.append(json_path)
         print(f"  Saved: {main_xlsx} ({len(group_df)} rows)")
@@ -363,5 +371,40 @@ def process_category(category_name: str, jsonl_files: list, output_base_dir: str
             f.write(group_quality_report)
 
         print(f"  Saved summary: {summary_file_path}")
+
+    return {"excel_files": excel_files, "json_files": json_files}
+
+
+def process_category(category_name: str, jsonl_files: list, output_base_dir: str,
+                      upload_images: bool = True, image_workers: int = 4,
+                      city_filter: str = None) -> dict:
+    df = load_all_hits(jsonl_files)
+    if df.empty:
+        return {"total": 0, "excel_files": [], "json_files": []}
+
+    df["_city"] = df["site"].apply(get_city_name)
+
+    if city_filter:
+        df = df[df["_city"] == city_filter]
+        print(f"  Filtered to city: {city_filter} ({len(df)} rows)")
+        if df.empty:
+            return {"total": 0, "excel_files": [], "json_files": []}
+
+    total = len(df)
+    excel_files = []
+    json_files = []
+
+    if category_name == OFF_PLAN_SOURCE_CATEGORY:
+        splits = split_off_plan(df)
+        for split_name, split_df in splits.items():
+            if split_df.empty:
+                continue
+            result = _process_category_internal(split_name, split_df, output_base_dir, upload_images, image_workers)
+            excel_files.extend(result["excel_files"])
+            json_files.extend(result["json_files"])
+    else:
+        result = _process_category_internal(category_name, df, output_base_dir, upload_images, image_workers)
+        excel_files.extend(result["excel_files"])
+        json_files.extend(result["json_files"])
 
     return {"total": total, "excel_files": excel_files, "json_files": json_files}
