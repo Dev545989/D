@@ -99,7 +99,7 @@ jobs:
                 }
           }
 
-          PAGES_PER_JOB = 30
+          PAGES_PER_JOB = 100
 
           matrix = {"include": []}
 
