@@ -10,10 +10,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from r2_uploader import upload_buffer
 from datetime import datetime
 
+
 PROPERTY_CATEGORIES = {
     "rent_residential", "rent_commercial", "rent_rooms_rent_flatmates",
-    "rent_holiday_homes", "rent_short_term_daily",
-    "sale_residential", "sale_commercial"
+    "rent_holiday_homes", "rent_short_term_monthly", "rent_short_term_daily",
+    "sale_residential", "sale_commercial", "sale_land", "sale_multiple_units"
 }
 
 JOB_CATEGORIES = {"jobs", "jobs_wanted"}
