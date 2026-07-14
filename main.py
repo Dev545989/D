@@ -4,6 +4,7 @@ import time
 import requests
 import random
 from datetime import datetime, timezone, timedelta
+from request_tracker import tracker
 import pandas as pd
 
 URL = "https://wd0ptz13zs-dsn.algolia.net/1/indexes/*/queries"
@@ -114,6 +115,7 @@ def get_page_with_retry(category: dict, page: int, max_retries: int = 3) -> dict
 
     for attempt in range(1, max_retries + 1):
         try:
+            tracker.log_request(source="product_detail")
             r = requests.post(URL, params=PARAMS, json=payload, timeout=30)
             r.raise_for_status()
             return r.json()
@@ -194,6 +196,15 @@ def run(category_name: str, start_page: int, end_page: int, output_jsonl: str) -
             f.write(f"Failed percentage: {(len(failed_pages)/total_pages)*100:.2f}%\n\n")
             for p in failed_pages:
                 f.write(f"page={p}\n")
+
+    stats_file = f"request_stats_{start}_{end}.json"
+    stats = tracker.save(stats_file)
+
+    print(f"\n--- Combined Request Stats ---")
+    print(f"Total: {stats['total_requests']} req | {stats['total_req_per_min']} req/min")
+    print(f"By source: {stats['per_source']}")
+    for worker, s in stats["per_worker"].items():
+        print(f"  {worker}: {s['requests']} req | {s['req_per_min']} req/min")
 
     print(f"Saved {len(hits)} listings to {output_jsonl} | {len(failed_pages)} failed pages")
 
