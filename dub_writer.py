@@ -16,8 +16,12 @@ PROPERTY_CATEGORIES = {
     "rent_holiday_homes", "rent_short_term_monthly", "rent_short_term_daily",
     "sale_residential", "sale_commercial", "sale_land", "sale_multiple_units"
 }
+PROPERTY_CATEGORIES = {
+    "rent_short_term_monthly", "sale_land", "sale_multiple_units"
+}
 
 JOB_CATEGORIES = {"jobs", "jobs_wanted"}
+JOB_CATEGORIES = {}
 NO_IMAGE_CATEGORIES = {"jobs", "jobs_wanted"}
 
 COLUMNS_TO_DROP = ["tag_slugs", "category", "category_slug_tree", "category_tree", "categories_v2",
