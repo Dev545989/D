@@ -99,7 +99,7 @@ jobs:
                 }
           }
 
-          PAGES_PER_JOB = 100
+          PAGES_PER_JOB = 50
 
           matrix = {"include": []}
 
@@ -110,13 +110,13 @@ jobs:
                       "requests": [{
                           "indexName": category["index"],
                           "query": "",
-                          "params": f"page=0&hitsPerPage=25&filters={category['filter']}",
+                          "params": f"page=0&hitsPerPage=35&filters={category['filter']}",
                       }]
                   }
                   r = requests.post(URL, params=PARAMS, json=payload, timeout=30)
                   data = r.json()
                   nb_pages = data["results"][0]["nbPages"]
-                  #nb_pages = 40
+                  nb_pages = 2
                   print(f"  {category_name}: {nb_pages} pages")
               except Exception as e:
                   print(f"  Failed: {e}")
@@ -174,27 +174,94 @@ jobs:
             ${{ matrix.category }}_${{ matrix.start }}_${{ matrix.end }}_result.json
           if-no-files-found: ignore
 
-  merge:
+  detect_merge_batches:
     runs-on: ubuntu-latest
     needs: scrape
+    outputs:
+      matrix: ${{ steps.build.outputs.matrix }}
+    steps:
+      - id: build
+        run: |
+          python << 'EOF'
+          import json
+          import os
+          import math
+          import requests
+
+          URL = "https://wd0ptz13zs-dsn.algolia.net/1/indexes/*/queries"
+          PARAMS = {
+              "x-algolia-agent": "Algolia for JavaScript (4.24.0); Browser (lite)",
+              "x-algolia-api-key": "cdd839b4fdac840289e88633779e8634",
+              "x-algolia-application-id": "WD0PTZ13ZS",
+          }
+
+          CATEGORIES = {
+              "rent_residential": {"index": "property-for-rent-residential.com", "filter": '("category_v2.slug_paths":"property-for-rent/residential")'},
+              "rent_commercial": {"index": "property-for-rent-commercial.com", "filter": '("category_v2.slug_paths":"property-for-rent/commercial")'},
+              "rent_rooms_rent_flatmates": {"index": "property-for-rent-rooms-for-rent-flatmates.com", "filter": '("category_v2.slug_paths":"property-for-rent/rooms-for-rent-flatmates")'},
+              "rent_holiday_homes": {"index": "property-for-rent-holiday-homes.com", "filter": '("categories.slug_paths":"property-for-rent/holiday-homes")'},
+              "rent_short_term_monthly": {"index": "property-for-rent-short-term.com", "filter": '("categories_v2.slug_paths":"property-for-rent/short-term")', "hits": []},
+              "rent_short_term_daily": {"index": "property-for-rent-short-term-daily.com", "filter": '("category_v2.slug_paths":"property-for-rent/short-term-daily")'},
+              "sale_residential": {"index": "property-for-sale-residential.com", "filter": '("category_v2.slug_paths":"property-for-sale/residential")'},
+              "sale_commercial": {"index": "property-for-sale-commercial.com", "filter": '("category_v2.slug_paths":"property-for-sale/commercial")'},
+              "sale_land": { "index": "property-for-sale-land.com", "filter": '("categories_v2.slug_paths":"property-for-sale/land")', "hits": [] },
+              "sale_multiple_units": { "index": "property-for-sale-multiple-units.com", "filter": '("categories_v2.slug_paths":"property-for-sale/multiple-units")', "hits": [] },
+              "jobs": {"index": "by_added_desc_jobs.com", "filter": '("category_v2.slug_paths":"jobs")'},
+              "jobs_wanted": {"index": "by_added_desc_jobs-wanted.com", "filter": '("category_v2.slug_paths":"jobs-wanted")'},
+          }
+          
+          ROWS_PER_BATCH = 3500
+          HITS_PER_PAGE = 35
+          PAGES_PER_BATCH = math.ceil(ROWS_PER_BATCH / HITS_PER_PAGE)
+
+          matrix = {"include": []}
+
+          for category_name, category in CATEGORIES.items():
+              try:
+                  payload = {
+                      "requests": [{
+                          "indexName": category["index"],
+                          "query": "",
+                          "params": f"page=0&hitsPerPage={HITS_PER_PAGE}&filters={category['filter']}",
+                      }]
+                  }
+                  r = requests.post(URL, params=PARAMS, json=payload, timeout=30)
+                  data = r.json()
+                  nb_pages = data["results"][0]["nbPages"]
+              except Exception as e:
+                  print(f"  Failed to detect pages for {category_name}: {e}")
+                  continue
+
+              if nb_pages == 0:
+                  continue
+
+              n_batches = math.ceil(nb_pages / PAGES_PER_BATCH)
+              print(f"{category_name}: {nb_pages} pages -> {n_batches} batches")
+
+              for b in range(n_batches):
+                  page_start = b * PAGES_PER_BATCH
+                  page_end = min((b + 1) * PAGES_PER_BATCH - 1, nb_pages - 1)
+                  matrix["include"].append({
+                      "category": category_name,
+                      "batch_index": str(b),
+                      "page_start": str(page_start),
+                      "page_end": str(page_end)
+                  })
+
+          print(f"Total merge batches: {len(matrix['include'])}")
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"matrix={json.dumps(matrix)}\n")
+          EOF
+  
+  merge_batch:
+    runs-on: ubuntu-latest
+    needs: detect_merge_batches
 
     strategy:
-      max-parallel: 8
-      matrix:
-        category:
-          - rent_residential
-          - rent_commercial
-          - rent_rooms_rent_flatmates
-          - rent_holiday_homes
-          - rent_short_term_daily
-          - rent_short_term_monthly
-          - sale_residential
-          - sale_commercial
-          - sale_land
-          - sale_multiple_units
-          - jobs
-          - jobs_wanted   
-        
+      max-parallel: 15
+      fail-fast: false
+      matrix: ${{ fromJson(needs.detect_merge_batches.outputs.matrix) }}
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -214,7 +281,89 @@ jobs:
           merge-multiple: true
           path: raw_parts/
 
-      - name: Process and upload to R2
+      - name: Process batch (no R2 upload yet)
+        env:
+          CF_R2_ACCESS_KEY_ID: ${{ secrets.CF_R2_ACCESS_KEY_ID }}
+          CF_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_R2_SECRET_ACCESS_KEY }}
+          CF_R2_ENDPOINT_URL: ${{ secrets.CF_R2_ENDPOINT_URL }}
+          CF_R2_BUCKET_NAME: ${{ secrets.CF_R2_BUCKET_NAME }}
+        run: |
+          python << 'EOF'
+          import glob
+          import re
+          from dub_writer import process_category
+
+          category = "${{ matrix.category }}"
+          page_start = int("${{ matrix.page_start }}")
+          page_end = int("${{ matrix.page_end }}")
+
+          all_jsonl = glob.glob('raw_parts/*.jsonl')
+          batch_jsonl = []
+          for f in all_jsonl:
+              match = re.search(r'_(\d+)_(\d+)\.jsonl$', f)
+              if match:
+                  s, e = int(match.group(1)), int(match.group(2))
+                  if s <= page_end and e >= page_start:
+                      batch_jsonl.append(f)
+
+          print(f"Batch {category} [{page_start}-{page_end}]: {len(batch_jsonl)} raw files")
+
+          if not batch_jsonl:
+              print("No data for this batch, skipping.")
+              exit(0)
+
+          output_base = "output"
+          result = process_category(category, batch_jsonl, output_base, upload_images=True)
+          print(f"Batch processed: {result['total']} rows | {len(result['excel_files'])} excel files")
+          EOF
+
+      - name: Upload batch artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: batch-${{ matrix.category }}-${{ matrix.batch_index }}
+          path: output/
+          if-no-files-found: ignore
+
+  final_merge:
+    runs-on: ubuntu-latest
+    needs: merge_batch
+
+    strategy:
+      max-parallel: 8
+      matrix:
+        category:
+          - rent_residential
+          - rent_commercial
+          - rent_rooms_rent_flatmates
+          - rent_holiday_homes
+          - rent_short_term_daily
+          - rent_short_term_monthly
+          - sale_residential
+          - sale_commercial
+          - sale_land
+          - sale_multiple_units
+          - jobs
+          - jobs_wanted
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pandas openpyxl boto3
+
+      - name: Download all batches for ${{ matrix.category }} (separate folders)
+        uses: actions/download-artifact@v4
+        with:
+          pattern: batch-${{ matrix.category }}-*
+          path: batches/
+
+      - name: Combine batches and upload to R2
         env:
           CF_R2_ACCESS_KEY_ID: ${{ secrets.CF_R2_ACCESS_KEY_ID }}
           CF_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_R2_SECRET_ACCESS_KEY }}
@@ -226,13 +375,11 @@ jobs:
           import os
           import json
           import boto3
-          import re
+          import pandas as pd
           from datetime import datetime
-          from dub_writer import process_category
+          from collections import defaultdict
 
           category = "${{ matrix.category }}"
-          jsonl_files = glob.glob('raw_parts/*.jsonl')
-
           dt = datetime.now()
           date_prefix = f"year={dt.year}/month={dt.strftime('%m')}/day={dt.strftime('%d')}"
 
@@ -244,102 +391,147 @@ jobs:
           )
           bucket = os.environ['CF_R2_BUCKET_NAME']
 
-          if not jsonl_files:
-              print(f"No raw data found for {category}")
-              # Upload empty summary
+          batch_dirs = glob.glob(f'batches/batch-{category}-*')
+
+          if not batch_dirs:
+              print(f"No batches found for {category}")
               r2_key = f"DUAE/{date_prefix}/{category}/summary/summary.txt"
-              summary_content = f"=== {category} ===\nStatus: NO DATA\nDate: {dt.strftime('%Y-%m-%d %H:%M:%S')}"
-              client.put_object(Bucket=bucket, Key=r2_key, Body=summary_content.encode('utf-8'), 
+              content = f"=== {category} ===\nStatus: NO DATA\nDate: {dt.strftime('%Y-%m-%d %H:%M:%S')}"
+              client.put_object(Bucket=bucket, Key=r2_key, Body=content.encode('utf-8'),
                                ContentType='text/plain; charset=utf-8')
               exit(0)
 
-          # Collect failed pages from result files
-          failed_pages = []
-          total_pages = 0
-          
-          for f in glob.glob('raw_parts/*.jsonl'):
-              # Extract start and end from filename
-              match = re.search(r'_(\d+)_(\d+)\.jsonl$', f)
-              if match:
-                  start = int(match.group(1))
-                  end = int(match.group(2))
-                  total_pages += (end - start + 1)
-              
-              # Read failed pages from accompanying file
-              failed_file = f.replace('.jsonl', '_failed.txt')
-              if os.path.exists(failed_file):
-                  with open(failed_file, 'r', encoding='utf-8') as ff:
-                      for line in ff:
-                          if line.startswith('page='):
+          excel_groups = defaultdict(list)   # relative_path -> [full_path1, full_path2, ...]
+
+          for batch_dir in batch_dirs:
+              for root, dirs, files in os.walk(batch_dir):
+                  for file in files:
+                      if file.endswith('.xlsx'):
+                          full_path = os.path.join(root, file)
+                          relative_path = os.path.relpath(full_path, batch_dir)
+                          excel_groups[relative_path].append(full_path)
+
+          print(f"Found {len(excel_groups)} unique file groups to combine")
+
+          total_rows_all = 0
+          uploaded_count = 0
+
+          for relative_path, batch_files in excel_groups.items():
+              combined_sheets = defaultdict(list)
+
+              for bf in batch_files:
+                  xl = pd.ExcelFile(bf)
+                  for sheet in xl.sheet_names:
+                      df = xl.parse(sheet)
+                      combined_sheets[sheet].append(df)
+
+              final_sheets = {}
+              for sheet_name, dfs in combined_sheets.items():
+                  merged_df = pd.concat(dfs, ignore_index=True)
+                  if 'id' in merged_df.columns:
+                      merged_df = merged_df.drop_duplicates(subset=['id'], keep='first')
+                  final_sheets[sheet_name] = merged_df
+                  total_rows_all += len(merged_df)
+
+              local_final_path = os.path.join("final_output", relative_path)
+              os.makedirs(os.path.dirname(local_final_path), exist_ok=True)
+
+              with pd.ExcelWriter(local_final_path, engine="openpyxl") as writer:
+                  for sheet_name, df in final_sheets.items():
+                      df.to_excel(writer, sheet_name=sheet_name, index=False)
+
+              json_relative = relative_path.replace('/excel/', '/json/').replace('.xlsx', '.json')
+              local_json_path = os.path.join("final_output", json_relative)
+              os.makedirs(os.path.dirname(local_json_path), exist_ok=True)
+
+              all_records = []
+              for sheet_name, df in final_sheets.items():
+                  records = df.to_dict(orient="records")
+                  for r in records:
+                      r["_sheet"] = sheet_name
+                  all_records.extend(records)
+
+              with open(local_json_path, "w", encoding="utf-8") as f:
+                  json.dump(all_records, f, ensure_ascii=False, indent=2, default=str)
+
+              r2_key_excel = f"DUAE/{date_prefix}/{relative_path.replace(os.sep, '/')}"
+              client.upload_file(local_final_path, bucket, r2_key_excel,
+                  ExtraArgs={'ContentType': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})
+              print(f"Uploaded Excel: {r2_key_excel}")
+
+              r2_key_json = f"DUAE/{date_prefix}/{json_relative.replace(os.sep, '/')}"
+              client.upload_file(local_json_path, bucket, r2_key_json,
+                  ExtraArgs={'ContentType': 'application/json; charset=utf-8'})
+              print(f"Uploaded JSON: {r2_key_json}")
+
+              uploaded_count += 1
+
+          summary_groups = defaultdict(list)
+          for batch_dir in batch_dirs:
+              for root, dirs, files in os.walk(batch_dir):
+                  for file in files:
+                      if file == 'summary.txt':
+                          full_path = os.path.join(root, file)
+                          relative_path = os.path.relpath(full_path, batch_dir)
+                          summary_groups[relative_path].append(full_path)
+
+          for relative_path, batch_files in summary_groups.items():
+              total_rows_group = 0
+              for bf in batch_files:
+                  with open(bf, 'r', encoding='utf-8') as f:
+                      content = f.read()
+                      for line in content.splitlines():
+                          if line.startswith("Total Rows:"):
                               try:
-                                  page_num = int(line.split('=')[1])
-                                  failed_pages.append(page_num)
+                                  total_rows_group += int(line.split(":")[1].strip())
                               except:
                                   pass
 
-          # Calculate failure percentage
-          failed_percentage = (len(failed_pages) / total_pages * 100) if total_pages > 0 else 0
+              combined_summary = f"=== {category} ===\n"
+              combined_summary += f"Combined from {len(batch_files)} batches\n"
+              combined_summary += f"Total Rows (combined): {total_rows_group}\n"
+              combined_summary += f"Generated at: {dt.strftime('%Y-%m-%d %H:%M:%S')}\n"
 
-          # Process data
-          output_base = "output"
-          result = process_category(category, jsonl_files, output_base, upload_images=True)
+              r2_key = f"DUAE/{date_prefix}/{relative_path.replace(os.sep, '/')}"
+              client.put_object(Bucket=bucket, Key=r2_key, Body=combined_summary.encode('utf-8'),
+                               ContentType='text/plain; charset=utf-8')
+              print(f"Uploaded summary: {r2_key}")
 
-          print(f"\nCategory: {category} | Total rows: {result['total']} | Excel files: {len(result['excel_files'])}")
-          print(f"Total Pages: {total_pages} | Failed Pages: {len(failed_pages)} | Failed: {failed_percentage:.2f}%")
+          all_failed_pages = []
+          total_pages_all = 0
 
-          # Upload Excel files with correct structure
-          for local_path in result["excel_files"]:
-            relative_path = os.path.relpath(local_path, output_base)
-            r2_key = f"DUAE/{date_prefix}/{relative_path.replace(os.sep, '/')}"
+          for batch_dir in batch_dirs:
+              for failed_json in glob.glob(os.path.join(batch_dir, "_batch_failed_*.json")):
+                  with open(failed_json, 'r', encoding='utf-8') as f:
+                      info = json.load(f)
+                      all_failed_pages.extend(info.get("failed_pages", []))
+                      total_pages_all += info.get("total_pages_in_batch", 0)
 
-            client.upload_file(local_path, bucket, r2_key,
-                ExtraArgs={'ContentType': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})
-            print(f"Uploaded Excel: {r2_key}")
-
-          # Upload JSON files with correct structure
-          for local_path in result["json_files"]:
-            relative_path = os.path.relpath(local_path, output_base)
-            r2_key = f"DUAE/{date_prefix}/{relative_path.replace(os.sep, '/')}"
-
-            client.upload_file(local_path, bucket, r2_key,
-                ExtraArgs={'ContentType': 'application/json; charset=utf-8'})
-            print(f"Uploaded JSON: {r2_key}")
-
-          # Upload summary.txt files
-          for root, dirs, files in os.walk('output'):
-            for file in files:
-                if file == 'summary.txt':
-                    local_path = os.path.join(root, file)
-                    relative_path = os.path.relpath(local_path, output_base)
-                    r2_key = f"DUAE/{date_prefix}/{relative_path.replace(os.sep, '/')}"
-                    client.upload_file(local_path, bucket, r2_key,
-                        ExtraArgs={'ContentType': 'text/plain; charset=utf-8'})
-                    print(f"Uploaded summary: {r2_key}")
-
+          all_failed_pages = sorted(set(all_failed_pages))
+          failed_percentage = (len(all_failed_pages) / total_pages_all * 100) if total_pages_all > 0 else 0
 
           failed_content_lines = []
           failed_content_lines.append(f"=== {category} ===\n")
-          failed_content_lines.append(f"Total Pages Attempted: {total_pages}\n")
-          failed_content_lines.append(f"Total Failed Pages: {len(failed_pages)}\n")
+          failed_content_lines.append(f"Total Pages Attempted: {total_pages_all}\n")
+          failed_content_lines.append(f"Total Failed Pages: {len(all_failed_pages)}\n")
           failed_content_lines.append(f"Failed Percentage: {failed_percentage:.2f}%\n")
           failed_content_lines.append(f"Success Rate: {100 - failed_percentage:.2f}%\n")
           failed_content_lines.append("\n" + "="*50 + "\n")
           failed_content_lines.append("Failed Pages Details:\n")
           failed_content_lines.append("="*50 + "\n")
 
-          if failed_pages:
-              failed_pages.sort()
-              failed_content_lines.append(f"Pages: {', '.join(map(str, failed_pages))}\n")
+          if all_failed_pages:
+              failed_content_lines.append(f"Pages: {', '.join(map(str, all_failed_pages))}\n")
               failed_content_lines.append("\nFailure Distribution:\n")
 
               consecutive_groups = []
-              current_group = [failed_pages[0]]
-              for i in range(1, len(failed_pages)):
-                  if failed_pages[i] == failed_pages[i-1] + 1:
-                      current_group.append(failed_pages[i])
+              current_group = [all_failed_pages[0]]
+              for i in range(1, len(all_failed_pages)):
+                  if all_failed_pages[i] == all_failed_pages[i-1] + 1:
+                      current_group.append(all_failed_pages[i])
                   else:
                       consecutive_groups.append(current_group)
-                      current_group = [failed_pages[i]]
+                      current_group = [all_failed_pages[i]]
               consecutive_groups.append(current_group)
 
               for group in consecutive_groups:
@@ -351,29 +543,18 @@ jobs:
               failed_content_lines.append("No failed pages! All pages scraped successfully.\n")
 
           failed_content = "".join(failed_content_lines)
-          local_failed_file = f"failed_{category}.txt"
-          with open(local_failed_file, "w", encoding="utf-8") as f:
-              f.write(failed_content)
 
-          summary_groups = set()
-          for local_path in result["excel_files"]:
-            relative_path = os.path.relpath(local_path, output_base)
-            parts = relative_path.replace(os.sep, '/').split('/')
-            hierarchy = "/".join(parts[:-2])
-            summary_groups.add(hierarchy)
+          summary_hierarchy_groups = set()
+          for relative_path in excel_groups.keys():
+              parts = relative_path.replace(os.sep, '/').split('/')
+              hierarchy = "/".join(parts[:-2])
+              summary_hierarchy_groups.add(hierarchy)
 
-          for hierarchy in summary_groups:
-            r2_key = f"DUAE/{date_prefix}/{hierarchy}/summary/failed_pages_{category}.txt"
-            client.upload_file(local_failed_file, bucket, r2_key,
-                ExtraArgs={'ContentType': 'text/plain; charset=utf-8'})
-            print(f"Uploaded: {r2_key}")
+          for hierarchy in summary_hierarchy_groups:
+              r2_key = f"DUAE/{date_prefix}/{hierarchy}/summary/failed_pages_{category}.txt"
+              client.put_object(Bucket=bucket, Key=r2_key, Body=failed_content.encode('utf-8'),
+                               ContentType='text/plain; charset=utf-8')
+              print(f"Uploaded: {r2_key}")
 
-          print(f"\nDONE: {len(result['excel_files'])} excel + {len(result['json_files'])} json files uploaded for {category}")
+          print(f"\nDONE: {uploaded_count} files uploaded for {category} | Total rows: {total_rows_all}")
           EOF
-
-      - name: Upload failed pages artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: failed-${{ matrix.category }}
-          path: raw_parts/*_failed.txt
-          if-no-files-found: ignore
