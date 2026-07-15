@@ -1,11 +1,16 @@
-name: Property & Jobs Scraper
+name: Property Sale & Jobs Scraper
 
 on:
+  workflow_run:
+    workflows: ["Property Rent Scraper"]
+    types:
+      - completed
   workflow_dispatch:
 
 jobs:
   detect_pages:
     runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
     outputs:
       matrix: ${{ steps.build_matrix.outputs.matrix }}
 
@@ -37,36 +42,6 @@ jobs:
           }
 
           CATEGORIES = {
-                "rent_residential": {
-                    "index": "property-for-rent-residential.com",
-                    "filter": '("category_v2.slug_paths":"property-for-rent/residential")',
-                    "hits": []
-                },
-                "rent_commercial": {
-                    "index": "property-for-rent-commercial.com",
-                    "filter": '("category_v2.slug_paths":"property-for-rent/commercial")',
-                    "hits": []
-                },
-                "rent_rooms_rent_flatmates": {
-                    "index": "property-for-rent-rooms-for-rent-flatmates.com",
-                    "filter": '("category_v2.slug_paths":"property-for-rent/rooms-for-rent-flatmates")',
-                    "hits": []
-                },
-                "rent_holiday_homes": {
-                    "index": "property-for-rent-holiday-homes.com",
-                    "filter": '("categories.slug_paths":"property-for-rent/holiday-homes")',
-                    "hits": []
-                },
-                "rent_short_term_monthly": {
-                    "index": "property-for-rent-short-term.com",
-                    "filter": '("categories_v2.slug_paths":"property-for-rent/short-term")',
-                    "hits": []
-                },
-                "rent_short_term_daily": {
-                    "index": "property-for-rent-short-term-daily.com",
-                    "filter": '("category_v2.slug_paths":"property-for-rent/short-term-daily")',
-                    "hits": []
-                },
                 "sale_residential": {
                     "index": "property-for-sale-residential.com",
                     "filter": '("category_v2.slug_paths":"property-for-sale/residential")',
@@ -145,7 +120,7 @@ jobs:
     needs: detect_pages
     strategy:
       matrix: ${{ fromJson(needs.detect_pages.outputs.matrix) }}
-      max-parallel: 10
+      max-parallel: 5
       fail-fast: false
 
     steps:
@@ -196,12 +171,6 @@ jobs:
           }
 
           CATEGORIES = {
-              "rent_residential": {"index": "property-for-rent-residential.com", "filter": '("category_v2.slug_paths":"property-for-rent/residential")'},
-              "rent_commercial": {"index": "property-for-rent-commercial.com", "filter": '("category_v2.slug_paths":"property-for-rent/commercial")'},
-              "rent_rooms_rent_flatmates": {"index": "property-for-rent-rooms-for-rent-flatmates.com", "filter": '("category_v2.slug_paths":"property-for-rent/rooms-for-rent-flatmates")'},
-              "rent_holiday_homes": {"index": "property-for-rent-holiday-homes.com", "filter": '("categories.slug_paths":"property-for-rent/holiday-homes")'},
-              "rent_short_term_monthly": {"index": "property-for-rent-short-term.com", "filter": '("categories_v2.slug_paths":"property-for-rent/short-term")', "hits": []},
-              "rent_short_term_daily": {"index": "property-for-rent-short-term-daily.com", "filter": '("category_v2.slug_paths":"property-for-rent/short-term-daily")'},
               "sale_residential": {"index": "property-for-sale-residential.com", "filter": '("category_v2.slug_paths":"property-for-sale/residential")'},
               "sale_commercial": {"index": "property-for-sale-commercial.com", "filter": '("category_v2.slug_paths":"property-for-sale/commercial")'},
               "sale_land": { "index": "property-for-sale-land.com", "filter": '("categories_v2.slug_paths":"property-for-sale/land")', "hits": [] },
@@ -258,7 +227,7 @@ jobs:
     needs: detect_merge_batches
 
     strategy:
-      max-parallel: 15
+      max-parallel: 5
       fail-fast: false
       matrix: ${{ fromJson(needs.detect_merge_batches.outputs.matrix) }}
 
@@ -329,15 +298,9 @@ jobs:
     needs: merge_batch
 
     strategy:
-      max-parallel: 10
+      max-parallel: 5
       matrix:
         category:
-          - rent_residential
-          - rent_commercial
-          - rent_rooms_rent_flatmates
-          - rent_holiday_homes
-          - rent_short_term_daily
-          - rent_short_term_monthly
           - sale_residential
           - sale_commercial
           - sale_land
