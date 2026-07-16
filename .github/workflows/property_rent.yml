@@ -176,7 +176,7 @@ jobs:
               "rent_short_term_daily": {"index": "property-for-rent-short-term-daily.com", "filter": '("category_v2.slug_paths":"property-for-rent/short-term-daily")'},
           }
           
-          ROWS_PER_BATCH = 3500
+          ROWS_PER_BATCH = 1000
           HITS_PER_PAGE = 35
           PAGES_PER_BATCH = math.ceil(ROWS_PER_BATCH / HITS_PER_PAGE)
 
@@ -224,7 +224,7 @@ jobs:
     needs: detect_merge_batches
 
     strategy:
-      max-parallel: 5
+      max-parallel: 10
       fail-fast: false
       matrix: ${{ fromJson(needs.detect_merge_batches.outputs.matrix) }}
 
@@ -295,7 +295,7 @@ jobs:
     needs: merge_batch
 
     strategy:
-      max-parallel: 5
+      max-parallel: 10
       matrix:
         category:
           - rent_residential

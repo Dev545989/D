@@ -231,7 +231,7 @@ def download_images(images: list, id_prod: str = "", category: str = "",
 
 
 def process_images_for_group(df: pd.DataFrame, category: str, city: str, cat0: str, cat1: str,
-                              workers: int = 2) -> pd.DataFrame:
+                              workers: int = 4) -> pd.DataFrame:
     df = df.copy()
     n = len(df)
     results = [None] * n
@@ -384,7 +384,7 @@ def _process_category_internal(category_name: str, df: pd.DataFrame, output_base
 
 
 def process_category(category_name: str, jsonl_files: list, output_base_dir: str,
-                      upload_images: bool = True, image_workers: int = 2,
+                      upload_images: bool = True, image_workers: int = 4,
                       city_filter: str = None) -> dict:
     df = load_all_hits(jsonl_files)
     if df.empty:

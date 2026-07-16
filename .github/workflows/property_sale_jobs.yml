@@ -179,7 +179,7 @@ jobs:
               "jobs_wanted": {"index": "by_added_desc_jobs-wanted.com", "filter": '("category_v2.slug_paths":"jobs-wanted")'},
           }
           
-          ROWS_PER_BATCH = 3500
+          ROWS_PER_BATCH = 1000
           HITS_PER_PAGE = 35
           PAGES_PER_BATCH = math.ceil(ROWS_PER_BATCH / HITS_PER_PAGE)
 
@@ -227,7 +227,7 @@ jobs:
     needs: detect_merge_batches
 
     strategy:
-      max-parallel: 5
+      max-parallel: 10
       fail-fast: false
       matrix: ${{ fromJson(needs.detect_merge_batches.outputs.matrix) }}
 
@@ -298,7 +298,7 @@ jobs:
     needs: merge_batch
 
     strategy:
-      max-parallel: 5
+      max-parallel: 10
       matrix:
         category:
           - sale_residential
