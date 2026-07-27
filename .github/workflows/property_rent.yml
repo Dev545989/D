@@ -88,7 +88,7 @@ jobs:
                   r = requests.post(URL, params=PARAMS, json=payload, timeout=30)
                   data = r.json()
                   nb_pages = data["results"][0]["nbPages"]
-                  #nb_pages = 2
+                  nb_pages = 2
                   print(f"  {category_name}: {nb_pages} pages")
               except Exception as e:
                   print(f"  Failed: {e}")
@@ -144,6 +144,7 @@ jobs:
             ${{ matrix.category }}_${{ matrix.start }}_${{ matrix.end }}.jsonl
             ${{ matrix.category }}_${{ matrix.start }}_${{ matrix.end }}_failed.txt
             ${{ matrix.category }}_${{ matrix.start }}_${{ matrix.end }}_result.json
+            request_stats_${{ matrix.start }}_${{ matrix.end }}.json
           if-no-files-found: ignore
 
   detect_merge_batches:
@@ -176,7 +177,7 @@ jobs:
               "rent_short_term_daily": {"index": "property-for-rent-short-term-daily.com", "filter": '("category_v2.slug_paths":"property-for-rent/short-term-daily")'},
           }
           
-          ROWS_PER_BATCH = 1000
+          ROWS_PER_BATCH = 2000
           HITS_PER_PAGE = 35
           PAGES_PER_BATCH = math.ceil(ROWS_PER_BATCH / HITS_PER_PAGE)
 
@@ -257,6 +258,7 @@ jobs:
           python << 'EOF'
           import glob
           import re
+          import shutil
           from dub_writer import process_category
 
           category = "${{ matrix.category }}"
@@ -281,6 +283,13 @@ jobs:
           output_base = "output"
           result = process_category(category, batch_jsonl, output_base, upload_images=True)
           print(f"Batch processed: {result['total']} rows | {len(result['excel_files'])} excel files")
+          
+          for stats_file in glob.glob('raw_parts/request_stats_*.json'):
+              m = re.search(r'request_stats_(\d+)_(\d+)\.json$', stats_file)
+              if m:
+                  s, e = int(m.group(1)), int(m.group(2))
+                  if s <= page_end and e >= page_start:
+                      shutil.copy(stats_file, f"output/_stats_{page_start}_{page_end}.json")
           EOF
 
       - name: Upload batch artifact
@@ -422,37 +431,34 @@ jobs:
 
               uploaded_count += 1
 
-          summary_groups = defaultdict(list)
+          # REQUEST STATS
+          def aggregate_request_stats(paths: list) -> dict:
+              total_requests = 0
+              total_duration_min = 0.0
+              for p in paths:
+                  try:
+                      with open(p, 'r', encoding='utf-8') as fh:
+                          s = json.load(fh)
+                      total_requests += s.get('total_requests', 0)
+                      total_duration_min += s.get('total_duration_min', 0) or 0
+                  except Exception as e:
+                      print(f"Could not read {p}: {e}")
+              requests_per_min = round(total_requests / total_duration_min, 2) if total_duration_min > 0 else total_requests
+              return {
+                  "requests_total": total_requests,
+                  "duration_sec": round(total_duration_min * 60, 2),
+                  "requests_per_min": requests_per_min,
+              }
+
+          stats_files = []
           for batch_dir in batch_dirs:
-              for root, dirs, files in os.walk(batch_dir):
-                  for file in files:
-                      if file == 'summary.txt':
-                          full_path = os.path.join(root, file)
-                          relative_path = os.path.relpath(full_path, batch_dir)
-                          summary_groups[relative_path].append(full_path)
+              stats_files.extend(glob.glob(os.path.join(batch_dir, "_stats_*.json")))
 
-          for relative_path, batch_files in summary_groups.items():
-              total_rows_group = 0
-              for bf in batch_files:
-                  with open(bf, 'r', encoding='utf-8') as f:
-                      content = f.read()
-                      for line in content.splitlines():
-                          if line.startswith("Total Rows:"):
-                              try:
-                                  total_rows_group += int(line.split(":")[1].strip())
-                              except:
-                                  pass
+          request_metrics = aggregate_request_stats(stats_files)
+          print(f"Request metrics for {category}: {request_metrics['requests_total']} req, "
+                f"{request_metrics['requests_per_min']} req/min, {request_metrics['duration_sec']}s")
 
-              combined_summary = f"=== {category} ===\n"
-              combined_summary += f"Combined from {len(batch_files)} batches\n"
-              combined_summary += f"Total Rows (combined): {total_rows_group}\n"
-              combined_summary += f"Generated at: {dt.strftime('%Y-%m-%d %H:%M:%S')}\n"
-
-              r2_key = f"DUAE/{date_prefix}/{relative_path.replace(os.sep, '/')}"
-              client.put_object(Bucket=bucket, Key=r2_key, Body=combined_summary.encode('utf-8'),
-                               ContentType='text/plain; charset=utf-8')
-              print(f"Uploaded summary: {r2_key}")
-
+          # FAILED PAGES
           all_failed_pages = []
           total_pages_all = 0
 
@@ -464,53 +470,168 @@ jobs:
                       total_pages_all += info.get("total_pages_in_batch", 0)
 
           all_failed_pages = sorted(set(all_failed_pages))
-          failed_percentage = (len(all_failed_pages) / total_pages_all * 100) if total_pages_all > 0 else 0
+          failed_pct = round(len(all_failed_pages) / total_pages_all * 100, 2) if total_pages_all > 0 else 0
 
-          failed_content_lines = []
-          failed_content_lines.append(f"=== {category} ===\n")
-          failed_content_lines.append(f"Total Pages Attempted: {total_pages_all}\n")
-          failed_content_lines.append(f"Total Failed Pages: {len(all_failed_pages)}\n")
-          failed_content_lines.append(f"Failed Percentage: {failed_percentage:.2f}%\n")
-          failed_content_lines.append(f"Success Rate: {100 - failed_percentage:.2f}%\n")
-          failed_content_lines.append("\n" + "="*50 + "\n")
-          failed_content_lines.append("Failed Pages Details:\n")
-          failed_content_lines.append("="*50 + "\n")
+          failed_data = {
+              "category": category,
+              "total_pages_attempted": total_pages_all,
+              "total_failed": len(all_failed_pages),
+              "failed_percentage": failed_pct,
+              "failed_pages": all_failed_pages,
+          }
 
-          if all_failed_pages:
-              failed_content_lines.append(f"Pages: {', '.join(map(str, all_failed_pages))}\n")
-              failed_content_lines.append("\nFailure Distribution:\n")
-
-              consecutive_groups = []
-              current_group = [all_failed_pages[0]]
-              for i in range(1, len(all_failed_pages)):
-                  if all_failed_pages[i] == all_failed_pages[i-1] + 1:
-                      current_group.append(all_failed_pages[i])
-                  else:
-                      consecutive_groups.append(current_group)
-                      current_group = [all_failed_pages[i]]
-              consecutive_groups.append(current_group)
-
-              for group in consecutive_groups:
-                  if len(group) == 1:
-                      failed_content_lines.append(f"  Page {group[0]}\n")
-                  else:
-                      failed_content_lines.append(f"  Pages {group[0]}-{group[-1]} (consecutive {len(group)} pages)\n")
-          else:
-              failed_content_lines.append("No failed pages! All pages scraped successfully.\n")
-
-          failed_content = "".join(failed_content_lines)
+          # UPLOAD summary.json / failed.json / request_metrics.json
+          # per group (city/cat0/cat1/extra_folder hierarchy)
 
           summary_hierarchy_groups = set()
           for relative_path in excel_groups.keys():
               parts = relative_path.replace(os.sep, '/').split('/')
-              hierarchy = "/".join(parts[:-2])
+              hierarchy = "/".join(parts[:-2])  # drop {excel_or_json}/{filename}
               summary_hierarchy_groups.add(hierarchy)
 
+          # Merge each batch's own summary.json (per exact group) instead of
+          # re-deriving totals from summary.txt -- read every batch's
+          # summary.json under this category and re-aggregate listings_count.
+          summary_by_group = {}
+          for batch_dir in batch_dirs:
+              for summary_file in glob.glob(os.path.join(batch_dir, "**", "summary.json"), recursive=True):
+                  rel = os.path.relpath(summary_file, batch_dir)
+                  hierarchy = os.path.dirname(os.path.dirname(rel)).replace(os.sep, '/')
+                  with open(summary_file, 'r', encoding='utf-8') as f:
+                      s = json.load(f)
+                  agg = summary_by_group.setdefault(hierarchy, {
+                      "scraped_at": s["scraped_at"],
+                      "data_scraped_date": s["data_scraped_date"],
+                      "saved_to_R2_date": s["saved_to_R2_date"],
+                      "city": s.get("city", ""),
+                      "category": s.get("category", ""),
+                      "total_listings": 0,
+                      "subcats": {},
+                  })
+                  agg["total_listings"] += s.get("total_listings", 0)
+                  for sc in s.get("subcategories", []):
+                      key = sc["slug"]
+                      if key in agg["subcats"]:
+                          agg["subcats"][key]["listings_count"] += sc["listings_count"]
+                      else:
+                          agg["subcats"][key] = dict(sc)
+
+          for hierarchy, agg in summary_by_group.items():
+              summary_data = {
+                  "scraped_at": agg["scraped_at"],
+                  "data_scraped_date": agg["data_scraped_date"],
+                  "saved_to_R2_date": agg["saved_to_R2_date"],
+                  "city": agg["city"],
+                  "category": agg["category"],
+                  "total_subcategories": len(agg["subcats"]),
+                  "total_listings": agg["total_listings"],
+                  "subcategories": list(agg["subcats"].values()),
+              }
+              r2_key = f"DUAE/{date_prefix}/{hierarchy}/summary/summary.json"
+              client.put_object(Bucket=bucket, Key=r2_key, Body=json.dumps(summary_data, ensure_ascii=False, indent=2).encode('utf-8'),
+                               ContentType='application/json; charset=utf-8')
+              print(f"Uploaded summary: {r2_key}")
+
           for hierarchy in summary_hierarchy_groups:
-              r2_key = f"DUAE/{date_prefix}/{hierarchy}/summary/failed_pages_{category}.txt"
-              client.put_object(Bucket=bucket, Key=r2_key, Body=failed_content.encode('utf-8'),
-                               ContentType='text/plain; charset=utf-8')
-              print(f"Uploaded: {r2_key}")
+              failed_key = f"DUAE/{date_prefix}/{hierarchy}/summary/failed.json"
+              client.put_object(Bucket=bucket, Key=failed_key, Body=json.dumps(failed_data, ensure_ascii=False, indent=2).encode('utf-8'),
+                               ContentType='application/json; charset=utf-8')
+              print(f"Uploaded: {failed_key}")
+
+              metrics_key = f"DUAE/{date_prefix}/{hierarchy}/summary/request_metrics.json"
+              client.put_object(Bucket=bucket, Key=metrics_key, Body=json.dumps(request_metrics, ensure_ascii=False, indent=2).encode('utf-8'),
+                               ContentType='application/json; charset=utf-8')
+              print(f"Uploaded: {metrics_key}")
 
           print(f"\nDONE: {uploaded_count} files uploaded for {category} | Total rows: {total_rows_all}")
+          EOF
+
+      - name: Compress images and cleanup
+        env:
+          CF_R2_ACCESS_KEY_ID: ${{ secrets.CF_R2_ACCESS_KEY_ID }}
+          CF_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_R2_SECRET_ACCESS_KEY }}
+          CF_R2_ENDPOINT_URL: ${{ secrets.CF_R2_ENDPOINT_URL }}
+          CF_R2_BUCKET_NAME: ${{ secrets.CF_R2_BUCKET_NAME }}
+        run: |
+          python << 'EOF'
+          import os
+          import boto3
+          import zipfile
+          from datetime import datetime
+          from collections import defaultdict
+
+          category = "${{ matrix.category }}"
+          dt = datetime.now()
+          date_prefix = f"year={dt.year}/month={dt.strftime('%m')}/day={dt.strftime('%d')}"
+
+          client = boto3.client('s3',
+              endpoint_url=os.environ['CF_R2_ENDPOINT_URL'],
+              aws_access_key_id=os.environ['CF_R2_ACCESS_KEY_ID'],
+              aws_secret_access_key=os.environ['CF_R2_SECRET_ACCESS_KEY'],
+              region_name='auto'
+          )
+          bucket = os.environ['CF_R2_BUCKET_NAME']
+
+          base_prefix = f"DUAE/{date_prefix}/"
+
+          all_image_keys = []
+          paginator = client.get_paginator('list_objects_v2')
+          for page in paginator.paginate(Bucket=bucket, Prefix=base_prefix):
+              for obj in page.get('Contents', []):
+                  key = obj['Key']
+                  if '/images/' in key and not key.endswith('.zip'):
+                      all_image_keys.append(key)
+
+          if not all_image_keys:
+              print(f"No images found to compress for {category}")
+              exit(0)
+
+          images_by_folder = defaultdict(list)
+          for key in all_image_keys:
+              folder = key.rsplit('/', 1)[0]
+              images_by_folder[folder].append(key)
+
+          print(f"Found {len(images_by_folder)} image folders to compress for {category}")
+
+          for folder, keys in images_by_folder.items():
+              print(f"  Compressing {len(keys)} images in {folder}...")
+
+              local_dir = os.path.join("temp_images", folder.replace('/', '_'))
+              os.makedirs(local_dir, exist_ok=True)
+
+              local_files = []
+              for key in keys:
+                  filename = key.rsplit('/', 1)[-1]
+                  local_path = os.path.join(local_dir, filename)
+                  try:
+                      client.download_file(bucket, key, local_path)
+                      local_files.append((local_path, filename))
+                  except Exception as e:
+                      print(f"    [ERROR] Failed to download {key}: {e}")
+
+              if not local_files:
+                  print(f"    No files downloaded, skipping folder.")
+                  continue
+
+              zip_local_path = os.path.join("temp_images", f"{folder.replace('/', '_')}.zip")
+              with zipfile.ZipFile(zip_local_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                  for local_path, filename in local_files:
+                      zf.write(local_path, arcname=filename)
+
+              zip_r2_key = f"{folder}/images.zip"
+              client.upload_file(zip_local_path, bucket, zip_r2_key,
+                  ExtraArgs={'ContentType': 'application/zip'})
+              print(f"    Uploaded zip: {zip_r2_key} ({len(local_files)} images)")
+
+              delete_objects = [{'Key': k} for k in keys]
+              for i in range(0, len(delete_objects), 1000):
+                  chunk = delete_objects[i:i+1000]
+                  client.delete_objects(Bucket=bucket, Delete={'Objects': chunk})
+              print(f"    Deleted {len(keys)} individual images from {folder}")
+
+              for local_path, _ in local_files:
+                  os.remove(local_path)
+              os.remove(zip_local_path)
+
+          print(f"\nDONE: Compressed images for {category}")
           EOF

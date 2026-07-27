@@ -8,7 +8,7 @@ import requests as req
 from PIL import Image
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from r2_uploader import upload_buffer
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 
 PROPERTY_CATEGORIES = {
@@ -285,6 +285,30 @@ def _write_excel_and_json(sheets: dict, xlsx_path: str, json_path: str) -> tuple
     return xlsx_path, json_path
 
 
+def build_group_summary(sheets: dict, group_df: pd.DataFrame, city: str, cat0: str, cat1, filename: str, dt: datetime) -> dict:
+    subcategories = [
+        {
+            "name_ar": "",
+            "name_en": name,
+            "slug": name,
+            "listings_count": len(sdf),
+            "has_subcategories": False,
+            "subcategories": [],
+        }
+        for name, sdf in sheets.items()
+    ]
+    return {
+        "scraped_at": dt.isoformat(),
+        "data_scraped_date": (dt - timedelta(days=1)).strftime("%Y-%m-%d"),
+        "saved_to_R2_date": dt.strftime("%Y-%m-%d"),
+        "city": city,
+        "category": f"{cat0}/{cat1 or ''}",
+        "file": filename,
+        "total_subcategories": len(subcategories),
+        "total_listings": len(group_df),
+        "subcategories": subcategories,
+    }
+
 def _process_category_internal(category_name: str, df: pd.DataFrame, output_base_dir: str,
                                  upload_images: bool, image_workers: int) -> dict:
     if df.empty:
@@ -368,17 +392,12 @@ def _process_category_internal(category_name: str, df: pd.DataFrame, output_base
         json_files.append(json_path)
         print(f"  Saved: {main_xlsx} ({len(group_df)} rows)")
 
-        summary_file_path = os.path.join(summary_dir, "summary.txt")
+        dt = datetime.now(timezone.utc)
+        summary = build_group_summary(sheets, group_df, safe_city, safe_cat0, safe_cat1, safe_filename, dt)
+        summary_file_path = os.path.join(summary_dir, "summary.json")
         with open(summary_file_path, "w", encoding="utf-8") as f:
-            f.write(f"=== {category_name} ===\n")
-            f.write(f"City: {safe_city}\n")
-            f.write(f"Category: {safe_cat0}/{safe_cat1 or ''}\n")
-            f.write(f"File: {safe_filename}\n")
-            f.write(f"Total Rows: {len(group_df)}\n")
-            f.write(f"Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(group_quality_report)
-
-        print(f"  Saved summary: {summary_file_path}")
+            json.dump(summary, f, ensure_ascii=False, indent=2)
+        print(f"  Saved summary: {summary_file_path} ({summary['total_subcategories']} subcats, {summary['total_listings']} listings)")
 
     return {"excel_files": excel_files, "json_files": json_files}
 

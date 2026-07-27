@@ -9,12 +9,13 @@ class RequestTracker:
         self.lock = threading.Lock()
         self.records = []
 
-    def log_request(self, source: str = ""):
+    def log_request(self, source: str = "", success: bool = True):
         with self.lock:
             self.records.append({
                 "worker": threading.current_thread().name,
                 "source": source,
-                "timestamp": time.time()
+                "timestamp": time.time(),
+                "success": success,
             })
 
     def summary(self) -> dict:
