@@ -288,6 +288,10 @@ jobs:
           result = process_category(category, batch_jsonl, output_base, upload_images=True)
           print(f"Batch processed: {result['total']} rows | {len(result['excel_files'])} excel files")
           
+          if not result["excel_files"]:
+            print("No output files generated. Skipping batch.")
+            exit(0)
+            
           for stats_file in glob.glob('raw_parts/request_stats_*.json'):
               m = re.search(r'request_stats_(\d+)_(\d+)\.json$', stats_file)
               if m:
