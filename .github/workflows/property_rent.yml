@@ -88,7 +88,7 @@ jobs:
                   r = requests.post(URL, params=PARAMS, json=payload, timeout=30)
                   data = r.json()
                   nb_pages = data["results"][0]["nbPages"]
-                  nb_pages = 2
+                  #nb_pages = 2
                   print(f"  {category_name}: {nb_pages} pages")
               except Exception as e:
                   print(f"  Failed: {e}")
@@ -201,7 +201,7 @@ jobs:
 
               if nb_pages == 0:
                   continue
-              nb_pages = 2
+              #nb_pages = 2
               n_batches = math.ceil(nb_pages / PAGES_PER_BATCH)
               print(f"{category_name}: {nb_pages} pages -> {n_batches} batches")
 
@@ -287,7 +287,7 @@ jobs:
           if not result["excel_files"]:
             print("No output files generated. Skipping batch.")
             exit(0)
-            
+
           for stats_file in glob.glob('raw_parts/request_stats_*.json'):
               m = re.search(r'request_stats_(\d+)_(\d+)\.json$', stats_file)
               if m:
