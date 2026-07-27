@@ -1,8 +1,8 @@
-name: Property Sale & Jobs Scraper
+name: Property Sale & Jobs
 
 on:
   workflow_run:
-    workflows: ["Property Rent Scraper"]
+    workflows: ["Property Rent"]
     types:
       - completed
   workflow_dispatch:
@@ -204,7 +204,7 @@ jobs:
 
               if nb_pages == 0:
                   continue
-                  
+
               nb_pages = 2
               n_batches = math.ceil(nb_pages / PAGES_PER_BATCH)
               print(f"{category_name}: {nb_pages} pages -> {n_batches} batches")
@@ -551,92 +551,139 @@ jobs:
           EOF
         
 
-      - name: Compress images and cleanup
+  compress_images:
+    runs-on: ubuntu-latest
+    needs: final_merge
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install boto3
+
+      - name: Compress images
         env:
           CF_R2_ACCESS_KEY_ID: ${{ secrets.CF_R2_ACCESS_KEY_ID }}
           CF_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_R2_SECRET_ACCESS_KEY }}
           CF_R2_ENDPOINT_URL: ${{ secrets.CF_R2_ENDPOINT_URL }}
           CF_R2_BUCKET_NAME: ${{ secrets.CF_R2_BUCKET_NAME }}
         run: |
-          python << 'EOF'
-          import os
-          import boto3
-          import zipfile
-          from datetime import datetime
-          from collections import defaultdict
+            python << 'EOF'
+            import os
+            import io
+            import boto3
+            import zipfile
+            from datetime import datetime
+            from collections import defaultdict
 
-          category = "${{ matrix.category }}"
-          dt = datetime.now()
-          date_prefix = f"year={dt.year}/month={dt.strftime('%m')}/day={dt.strftime('%d')}"
+            dt = datetime.now()
+            date_prefix = f"year={dt.year}/month={dt.strftime('%m')}/day={dt.strftime('%d')}"
 
-          client = boto3.client('s3',
-              endpoint_url=os.environ['CF_R2_ENDPOINT_URL'],
-              aws_access_key_id=os.environ['CF_R2_ACCESS_KEY_ID'],
-              aws_secret_access_key=os.environ['CF_R2_SECRET_ACCESS_KEY'],
-              region_name='auto'
-          )
-          bucket = os.environ['CF_R2_BUCKET_NAME']
+            client = boto3.client(
+                "s3",
+                endpoint_url=os.environ["CF_R2_ENDPOINT_URL"],
+                aws_access_key_id=os.environ["CF_R2_ACCESS_KEY_ID"],
+                aws_secret_access_key=os.environ["CF_R2_SECRET_ACCESS_KEY"],
+                region_name="auto",
+            )
 
-          base_prefix = f"DUAE/{date_prefix}/"
+            bucket = os.environ["CF_R2_BUCKET_NAME"]
 
-          all_image_keys = []
-          paginator = client.get_paginator('list_objects_v2')
-          for page in paginator.paginate(Bucket=bucket, Prefix=base_prefix):
-              for obj in page.get('Contents', []):
-                  key = obj['Key']
-                  if '/images/' in key and not key.endswith('.zip'):
-                      all_image_keys.append(key)
+            base_prefix = f"DUAE/{date_prefix}/"
 
-          if not all_image_keys:
-              print(f"No images found to compress for {category}")
-              exit(0)
+            all_image_keys = []
 
-          images_by_folder = defaultdict(list)
-          for key in all_image_keys:
-              folder = key.rsplit('/', 1)[0]
-              images_by_folder[folder].append(key)
+            paginator = client.get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=bucket, Prefix=base_prefix):
+                for obj in page.get("Contents", []):
+                    key = obj["Key"]
+                    if "/images/" in key and not key.endswith(".zip"):
+                        all_image_keys.append(key)
 
-          print(f"Found {len(images_by_folder)} image folders to compress for {category}")
+            if not all_image_keys:
+                print("No images found to compress")
+                exit(0)
 
-          for folder, keys in images_by_folder.items():
-              print(f"  Compressing {len(keys)} images in {folder}...")
+            images_by_folder = defaultdict(list)
 
-              local_dir = os.path.join("temp_images", folder.replace('/', '_'))
-              os.makedirs(local_dir, exist_ok=True)
+            for key in all_image_keys:
+                folder = key.rsplit("/", 1)[0]
+                images_by_folder[folder].append(key)
 
-              local_files = []
-              for key in keys:
-                  filename = key.rsplit('/', 1)[-1]
-                  local_path = os.path.join(local_dir, filename)
-                  try:
-                      client.download_file(bucket, key, local_path)
-                      local_files.append((local_path, filename))
-                  except Exception as e:
-                      print(f"    [ERROR] Failed to download {key}: {e}")
+            print(f"Found {len(images_by_folder)} image folders to compress")
 
-              if not local_files:
-                  print(f"    No files downloaded, skipping folder.")
-                  continue
+            for folder, keys in images_by_folder.items():
 
-              zip_local_path = os.path.join("temp_images", f"{folder.replace('/', '_')}.zip")
-              with zipfile.ZipFile(zip_local_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-                  for local_path, filename in local_files:
-                      zf.write(local_path, arcname=filename)
+                print(f"\nCompressing {len(keys)} images in {folder}...")
 
-              zip_r2_key = f"{folder}/images.zip"
-              client.upload_file(zip_local_path, bucket, zip_r2_key,
-                  ExtraArgs={'ContentType': 'application/zip'})
-              print(f"    Uploaded zip: {zip_r2_key} ({len(local_files)} images)")
+                with io.BytesIO() as zip_buffer:
 
-              delete_objects = [{'Key': k} for k in keys]
-              for i in range(0, len(delete_objects), 1000):
-                  chunk = delete_objects[i:i+1000]
-                  client.delete_objects(Bucket=bucket, Delete={'Objects': chunk})
-              print(f"    Deleted {len(keys)} individual images from {folder}")
+                    uploaded_count = 0
 
-              for local_path, _ in local_files:
-                  os.remove(local_path)
-              os.remove(zip_local_path)
+                    with zipfile.ZipFile(
+                        zip_buffer,
+                        mode="w",
+                        compression=zipfile.ZIP_DEFLATED,
+                    ) as zf:
 
-          print(f"\nDONE: Compressed images for {category}")
-          EOF
+                        for key in keys:
+
+                            filename = key.rsplit("/", 1)[-1]
+
+                            try:
+                                obj = client.get_object(Bucket=bucket, Key=key)
+                                body = obj["Body"]
+
+                                try:
+                                    zf.writestr(filename, body.read())
+                                    uploaded_count += 1
+                                finally:
+                                    body.close()
+
+                            except Exception as e:
+                                print(f"    [ERROR] Failed to read {key}: {e}")
+
+                    if uploaded_count == 0:
+                        print("    No images were added to the zip, skipping folder.")
+                        continue
+
+                    zip_buffer.seek(0)
+
+                    zip_r2_key = f"{folder}/images.zip"
+
+                    client.upload_fileobj(
+                        zip_buffer,
+                        bucket,
+                        zip_r2_key,
+                        ExtraArgs={
+                            "ContentType": "application/zip"
+                        },
+                    )
+
+                    response = client.head_object(
+                        Bucket=bucket,
+                        Key=zip_r2_key,
+                    )
+
+                    print(
+                        f"    Uploaded zip: {zip_r2_key} "
+                        f"({uploaded_count} images, {response['ContentLength']} bytes)"
+                    )
+
+                    delete_objects = [{"Key": k} for k in keys]
+
+                    for i in range(0, len(delete_objects), 1000):
+                        client.delete_objects(
+                            Bucket=bucket,
+                            Delete={
+                                "Objects": delete_objects[i:i + 1000]
+                            },
+                        )
+
+                    print(f"    Deleted {len(keys)} individual images from {folder}")
+
+            print("\nDONE: Compressed all image folders")
+            EOF
