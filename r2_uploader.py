@@ -35,7 +35,7 @@ R2_CLIENT_INSTANCE = get_r2_client()
 
 
 def build_r2_key(folder_name: str, category: str, file_type: str, filename: str,
-                  dt: datetime = None, city: str = None, category_display: str = None) -> str:
+                  dt: datetime = None, category_display: str = None) -> str:
     if dt is None:
         dt = datetime.now()
 
@@ -43,16 +43,12 @@ def build_r2_key(folder_name: str, category: str, file_type: str, filename: str,
     month = f"month={dt.strftime('%m')}"
     day   = f"day={dt.strftime('%d')}"
 
-    if city and category_display:
-        if file_type:
-            return f"{folder_name}/{year}/{month}/{day}/{city}/{category_display}/{category}/{file_type}/{filename}"
-        else:
-            return f"{folder_name}/{year}/{month}/{day}/{city}/{category_display}/{filename}"
+    cat_path = category_display or category
 
     if file_type:
-        return f"{folder_name}/{year}/{month}/{day}/{category}/{file_type}/{filename}"
+        return f"{folder_name}/{year}/{month}/{day}/{cat_path}/{file_type}/{filename}"
     else:
-        return f"{folder_name}/{year}/{month}/{day}/{category}/{filename}"
+        return f"{folder_name}/{year}/{month}/{day}/{cat_path}/{filename}"
 
 
 def upload_buffer(
@@ -63,14 +59,13 @@ def upload_buffer(
     file_type: str = "images",
     content_type: str = "image/webp",
     dt: datetime = None,
-    city: str = None,
     category_display: str = None
 ) -> str | None:
     client = R2_CLIENT_INSTANCE if R2_CLIENT_INSTANCE else get_r2_client()
     if not client or not BUCKET_NAME:
         return None
 
-    r2_key = build_r2_key(folder_name, category, file_type, filename, dt, city, category_display)
+    r2_key = build_r2_key(folder_name, category, file_type, filename, dt, category_display)
 
     try:
         buffer.seek(0)

@@ -147,6 +147,153 @@ jobs:
             request_stats_${{ matrix.start }}_${{ matrix.end }}.json
           if-no-files-found: ignore
 
+  # Extracts every unique agent/agency slug referenced across all raw
+  # listings scraped by this workflow (agent_profile -> agent,
+  # agent -> agency), so each profile is phone-scraped exactly once no
+  # matter how many listings it appears on.
+  combine_profiles:
+    runs-on: ubuntu-latest
+    needs: scrape
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pandas openpyxl
+
+      - name: Download all raw data
+        uses: actions/download-artifact@v4
+        with:
+          pattern: raw-*
+          merge-multiple: true
+          path: raw_parts/
+
+      - name: Build unique agent/agency profile lists
+        run: |
+          python build_unique_profiles.py \
+            --pattern "raw_parts/*.jsonl" \
+            --agent-output combined_agent_profiles.xlsx \
+            --agency-output combined_agency_profiles.xlsx
+
+      - name: Upload combined profile lists
+        uses: actions/upload-artifact@v4
+        with:
+          name: combined-profiles
+          path: |
+            combined_agent_profiles.xlsx
+            combined_agency_profiles.xlsx
+          if-no-files-found: ignore
+
+  # Splits each of the two unique-profile files into 15-row chunks so the
+  # phone_scrape job below can run one chunk per matrix entry.
+  detect_phone_jobs:
+    runs-on: ubuntu-latest
+    needs: combine_profiles
+    outputs:
+      matrix: ${{ steps.build_matrix.outputs.matrix }}
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pandas openpyxl
+
+      - name: Download combined profile lists
+        uses: actions/download-artifact@v4
+        with:
+          name: combined-profiles
+
+      - name: Build phone-job matrix (15-row chunks)
+        id: build_matrix
+        run: |
+          python << 'EOF'
+          import json
+          import os
+          import pandas as pd
+
+          CHUNK_SIZE = 15
+          matrix = {"include": []}
+
+          for profile_type, path in [("agent", "combined_agent_profiles.xlsx"),
+                                      ("agency", "combined_agency_profiles.xlsx")]:
+              if not os.path.exists(path):
+                  continue
+              df = pd.read_excel(path)
+              n = len(df)
+              print(f"{profile_type}: {n} unique profiles")
+              for i in range(0, n, CHUNK_SIZE):
+                  start = i
+                  end = min(i + CHUNK_SIZE, n)
+                  matrix["include"].append({
+                      "profile_type": profile_type,
+                      "start": start,
+                      "end": end
+                  })
+
+          print(f"Total phone jobs: {len(matrix['include'])}")
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as fh:
+              fh.write(f"matrix={json.dumps(matrix)}\n")
+          EOF
+
+  # Same Camoufox phone-reveal approach as the agency/agent scraper, run
+  # 15 unique profiles at a time. max-parallel: 1 makes every chunk (both
+  # agent and agency) run one after another.
+  phone_scrape:
+    runs-on: ubuntu-latest
+    needs: detect_phone_jobs
+    if: needs.detect_phone_jobs.outputs.matrix != '{"include":[]}'
+    strategy:
+      matrix: ${{ fromJson(needs.detect_phone_jobs.outputs.matrix) }}
+      max-parallel: 1
+      fail-fast: false
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-0 libdbus-glib-1-2
+
+      - name: Install Camoufox
+        run: python -m camoufox fetch
+
+      - name: Download combined profile lists
+        uses: actions/download-artifact@v4
+        with:
+          name: combined-profiles
+
+      - name: Scrape phone numbers
+        run: |
+          python scraper_agency_agent.py \
+            --input "combined_${{ matrix.profile_type }}_profiles.xlsx" \
+            --profile-type ${{ matrix.profile_type }} \
+            --start ${{ matrix.start }} \
+            --end ${{ matrix.end }}
+
+      - name: Upload phone results
+        uses: actions/upload-artifact@v4
+        with:
+          name: phones-${{ matrix.profile_type }}-${{ matrix.start }}-${{ matrix.end }}
+          path: ${{ matrix.profile_type }}_with_phone_${{ matrix.start }}_${{ matrix.end }}.csv
+          if-no-files-found: ignore
+
+
   detect_merge_batches:
     runs-on: ubuntu-latest
     needs: scrape
@@ -222,7 +369,7 @@ jobs:
   
   merge_batch:
     runs-on: ubuntu-latest
-    needs: detect_merge_batches
+    needs: [detect_merge_batches, phone_scrape]
 
     strategy:
       max-parallel: 10
@@ -248,6 +395,14 @@ jobs:
           merge-multiple: true
           path: raw_parts/
 
+      - name: Download phone data
+        uses: actions/download-artifact@v4
+        with:
+          pattern: phones-*
+          merge-multiple: true
+          path: phones_parts/
+        continue-on-error: true
+
       - name: Process batch (no R2 upload yet)
         env:
           CF_R2_ACCESS_KEY_ID: ${{ secrets.CF_R2_ACCESS_KEY_ID }}
@@ -259,11 +414,27 @@ jobs:
           import glob
           import re
           import shutil
+          import pandas as pd
           from dub_writer import process_category
 
           category = "${{ matrix.category }}"
           page_start = int("${{ matrix.page_start }}")
           page_end = int("${{ matrix.page_end }}")
+
+          # Build slug -> phone lookup from the sequential Camoufox jobs
+          phone_lookup = {}
+          for pf in glob.glob('phones_parts/*_with_phone_*.csv'):
+              try:
+                  pdf = pd.read_csv(pf, dtype={'slug': str, 'contact_phone_number': str})
+              except Exception as e:
+                  print(f"  [WARN] Could not read {pf}: {e}")
+                  continue
+              if 'slug' not in pdf.columns or 'contact_phone_number' not in pdf.columns:
+                  continue
+              for _, prow in pdf.iterrows():
+                  if pd.notna(prow.get('contact_phone_number')):
+                      phone_lookup[str(prow['slug'])] = prow['contact_phone_number']
+          print(f"  Loaded {len(phone_lookup)} phone numbers")
 
           all_jsonl = glob.glob('raw_parts/*.jsonl')
           batch_jsonl = []
@@ -281,7 +452,7 @@ jobs:
               exit(0)
 
           output_base = "output"
-          result = process_category(category, batch_jsonl, output_base, upload_images=True)
+          result = process_category(category, batch_jsonl, output_base, upload_images=True, phone_lookup=phone_lookup)
           print(f"Batch processed: {result['total']} rows | {len(result['excel_files'])} excel files")
           
           if not result["excel_files"]:
@@ -391,7 +562,7 @@ jobs:
               for bf in batch_files:
                   xl = pd.ExcelFile(bf)
                   for sheet in xl.sheet_names:
-                      df = xl.parse(sheet)
+                      df = xl.parse(sheet, dtype={'contact_phone_number': str})
                       combined_sheets[sheet].append(df)
 
               final_sheets = {}
@@ -485,7 +656,7 @@ jobs:
           }
 
           # UPLOAD summary.json / failed.json / request_metrics.json
-          # per group (city/cat0/cat1/extra_folder hierarchy)
+          # per group (cat0/cat1/extra_folder hierarchy)
 
           summary_hierarchy_groups = set()
           for relative_path in excel_groups.keys():
@@ -507,7 +678,6 @@ jobs:
                       "scraped_at": s["scraped_at"],
                       "data_scraped_date": s["data_scraped_date"],
                       "saved_to_R2_date": s["saved_to_R2_date"],
-                      "city": s.get("city", ""),
                       "category": s.get("category", ""),
                       "total_listings": 0,
                       "subcats": {},
@@ -525,7 +695,6 @@ jobs:
                   "scraped_at": agg["scraped_at"],
                   "data_scraped_date": agg["data_scraped_date"],
                   "saved_to_R2_date": agg["saved_to_R2_date"],
-                  "city": agg["city"],
                   "category": agg["category"],
                   "total_subcategories": len(agg["subcats"]),
                   "total_listings": agg["total_listings"],
@@ -550,139 +719,139 @@ jobs:
           print(f"\nDONE: {uploaded_count} files uploaded for {category} | Total rows: {total_rows_all}")
           EOF
 
-  compress_images:
-    runs-on: ubuntu-latest
-    needs: final_merge
+#   compress_images:
+#     runs-on: ubuntu-latest
+#     needs: final_merge
 
-    steps:
-      - uses: actions/checkout@v4
+#     steps:
+#       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+#       - uses: actions/setup-python@v5
+#         with:
+#           python-version: "3.11"
 
-      - run: pip install boto3
+#       - run: pip install boto3
 
-      - name: Compress images
-        env:
-          CF_R2_ACCESS_KEY_ID: ${{ secrets.CF_R2_ACCESS_KEY_ID }}
-          CF_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_R2_SECRET_ACCESS_KEY }}
-          CF_R2_ENDPOINT_URL: ${{ secrets.CF_R2_ENDPOINT_URL }}
-          CF_R2_BUCKET_NAME: ${{ secrets.CF_R2_BUCKET_NAME }}
-        run: |
-            python << 'EOF'
-            import os
-            import io
-            import boto3
-            import zipfile
-            from datetime import datetime
-            from collections import defaultdict
+#       - name: Compress images
+#         env:
+#           CF_R2_ACCESS_KEY_ID: ${{ secrets.CF_R2_ACCESS_KEY_ID }}
+#           CF_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_R2_SECRET_ACCESS_KEY }}
+#           CF_R2_ENDPOINT_URL: ${{ secrets.CF_R2_ENDPOINT_URL }}
+#           CF_R2_BUCKET_NAME: ${{ secrets.CF_R2_BUCKET_NAME }}
+#         run: |
+#             python << 'EOF'
+#             import os
+#             import io
+#             import boto3
+#             import zipfile
+#             from datetime import datetime
+#             from collections import defaultdict
 
-            dt = datetime.now()
-            date_prefix = f"year={dt.year}/month={dt.strftime('%m')}/day={dt.strftime('%d')}"
+#             dt = datetime.now()
+#             date_prefix = f"year={dt.year}/month={dt.strftime('%m')}/day={dt.strftime('%d')}"
 
-            client = boto3.client(
-                "s3",
-                endpoint_url=os.environ["CF_R2_ENDPOINT_URL"],
-                aws_access_key_id=os.environ["CF_R2_ACCESS_KEY_ID"],
-                aws_secret_access_key=os.environ["CF_R2_SECRET_ACCESS_KEY"],
-                region_name="auto",
-            )
+#             client = boto3.client(
+#                 "s3",
+#                 endpoint_url=os.environ["CF_R2_ENDPOINT_URL"],
+#                 aws_access_key_id=os.environ["CF_R2_ACCESS_KEY_ID"],
+#                 aws_secret_access_key=os.environ["CF_R2_SECRET_ACCESS_KEY"],
+#                 region_name="auto",
+#             )
 
-            bucket = os.environ["CF_R2_BUCKET_NAME"]
+#             bucket = os.environ["CF_R2_BUCKET_NAME"]
 
-            base_prefix = f"DUAE/{date_prefix}/"
+#             base_prefix = f"DUAE/{date_prefix}/"
 
-            all_image_keys = []
+#             all_image_keys = []
 
-            paginator = client.get_paginator("list_objects_v2")
-            for page in paginator.paginate(Bucket=bucket, Prefix=base_prefix):
-                for obj in page.get("Contents", []):
-                    key = obj["Key"]
-                    if "/images/" in key and not key.endswith(".zip"):
-                        all_image_keys.append(key)
+#             paginator = client.get_paginator("list_objects_v2")
+#             for page in paginator.paginate(Bucket=bucket, Prefix=base_prefix):
+#                 for obj in page.get("Contents", []):
+#                     key = obj["Key"]
+#                     if "/images/" in key and not key.endswith(".zip"):
+#                         all_image_keys.append(key)
 
-            if not all_image_keys:
-                print("No images found to compress")
-                exit(0)
+#             if not all_image_keys:
+#                 print("No images found to compress")
+#                 exit(0)
 
-            images_by_folder = defaultdict(list)
+#             images_by_folder = defaultdict(list)
 
-            for key in all_image_keys:
-                folder = key.rsplit("/", 1)[0]
-                images_by_folder[folder].append(key)
+#             for key in all_image_keys:
+#                 folder = key.rsplit("/", 1)[0]
+#                 images_by_folder[folder].append(key)
 
-            print(f"Found {len(images_by_folder)} image folders to compress")
+#             print(f"Found {len(images_by_folder)} image folders to compress")
 
-            for folder, keys in images_by_folder.items():
+#             for folder, keys in images_by_folder.items():
 
-                print(f"\nCompressing {len(keys)} images in {folder}...")
+#                 print(f"\nCompressing {len(keys)} images in {folder}...")
 
-                with io.BytesIO() as zip_buffer:
+#                 with io.BytesIO() as zip_buffer:
 
-                    uploaded_count = 0
+#                     uploaded_count = 0
 
-                    with zipfile.ZipFile(
-                        zip_buffer,
-                        mode="w",
-                        compression=zipfile.ZIP_DEFLATED,
-                    ) as zf:
+#                     with zipfile.ZipFile(
+#                         zip_buffer,
+#                         mode="w",
+#                         compression=zipfile.ZIP_DEFLATED,
+#                     ) as zf:
 
-                        for key in keys:
+#                         for key in keys:
 
-                            filename = key.rsplit("/", 1)[-1]
+#                             filename = key.rsplit("/", 1)[-1]
 
-                            try:
-                                obj = client.get_object(Bucket=bucket, Key=key)
-                                body = obj["Body"]
+#                             try:
+#                                 obj = client.get_object(Bucket=bucket, Key=key)
+#                                 body = obj["Body"]
 
-                                try:
-                                    zf.writestr(filename, body.read())
-                                    uploaded_count += 1
-                                finally:
-                                    body.close()
+#                                 try:
+#                                     zf.writestr(filename, body.read())
+#                                     uploaded_count += 1
+#                                 finally:
+#                                     body.close()
 
-                            except Exception as e:
-                                print(f"    [ERROR] Failed to read {key}: {e}")
+#                             except Exception as e:
+#                                 print(f"    [ERROR] Failed to read {key}: {e}")
 
-                    if uploaded_count == 0:
-                        print("    No images were added to the zip, skipping folder.")
-                        continue
+#                     if uploaded_count == 0:
+#                         print("    No images were added to the zip, skipping folder.")
+#                         continue
 
-                    zip_buffer.seek(0)
+#                     zip_buffer.seek(0)
 
-                    zip_r2_key = f"{folder}/images.zip"
+#                     zip_r2_key = f"{folder}/images.zip"
 
-                    client.upload_fileobj(
-                        zip_buffer,
-                        bucket,
-                        zip_r2_key,
-                        ExtraArgs={
-                            "ContentType": "application/zip"
-                        },
-                    )
+#                     client.upload_fileobj(
+#                         zip_buffer,
+#                         bucket,
+#                         zip_r2_key,
+#                         ExtraArgs={
+#                             "ContentType": "application/zip"
+#                         },
+#                     )
 
-                    response = client.head_object(
-                        Bucket=bucket,
-                        Key=zip_r2_key,
-                    )
+#                     response = client.head_object(
+#                         Bucket=bucket,
+#                         Key=zip_r2_key,
+#                     )
 
-                    print(
-                        f"    Uploaded zip: {zip_r2_key} "
-                        f"({uploaded_count} images, {response['ContentLength']} bytes)"
-                    )
+#                     print(
+#                         f"    Uploaded zip: {zip_r2_key} "
+#                         f"({uploaded_count} images, {response['ContentLength']} bytes)"
+#                     )
 
-                    delete_objects = [{"Key": k} for k in keys]
+#                     delete_objects = [{"Key": k} for k in keys]
 
-                    for i in range(0, len(delete_objects), 1000):
-                        client.delete_objects(
-                            Bucket=bucket,
-                            Delete={
-                                "Objects": delete_objects[i:i + 1000]
-                            },
-                        )
+#                     for i in range(0, len(delete_objects), 1000):
+#                         client.delete_objects(
+#                             Bucket=bucket,
+#                             Delete={
+#                                 "Objects": delete_objects[i:i + 1000]
+#                             },
+#                         )
 
-                    print(f"    Deleted {len(keys)} individual images from {folder}")
+#                     print(f"    Deleted {len(keys)} individual images from {folder}")
 
-            print("\nDONE: Compressed all image folders")
-            EOF
+#             print("\nDONE: Compressed all image folders")
+#             EOF
