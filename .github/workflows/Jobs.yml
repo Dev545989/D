@@ -2,7 +2,7 @@ name: Jobs
 
 on:
   workflow_run:
-    workflows: ["Sale (bach 2)"]
+    workflows: ["Rent (batch 1)"]
     types:
       - completed
   workflow_dispatch:

@@ -1,8 +1,8 @@
 name: Rent (batch 1)
 
 on:
-  repository_dispatch:
-    types: [new-projects-done]
+  schedule:
+    - cron: '0 0 * * *'
   workflow_dispatch:
 
 jobs:
