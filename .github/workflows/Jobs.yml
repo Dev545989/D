@@ -221,7 +221,7 @@ jobs:
 
           output_base = "output"
           result = process_category(category, jsonl_files, output_base, upload_images=True,
-                                    enrich_contact_details = True)
+                                    enrich_contact_details = False)
 
           print(f"\nCategory: {category} | Total rows: {result['total']} | Excel files: {len(result['excel_files'])}")
           print(f"Total Pages: {total_pages} | Failed Pages: {len(failed_pages)} | Failed: {failed_percentage:.2f}%")
