@@ -1,13 +1,16 @@
-name: Property Rent
+name: Sale (bach 1)
 
 on:
-  repository_dispatch:
-    types: [new-projects-done]
+  workflow_run:
+    workflows: ["Rent (batch 2)"]
+    types:
+      - completed
   workflow_dispatch:
 
 jobs:
   detect_pages:
     runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
     outputs:
       matrix: ${{ steps.build_matrix.outputs.matrix }}
 
@@ -39,36 +42,16 @@ jobs:
           }
 
           CATEGORIES = {
-                "rent_residential": {
-                    "index": "property-for-rent-residential.com",
-                    "filter": '("category_v2.slug_paths":"property-for-rent/residential")',
+                "sale_residential": {
+                    "index": "property-for-sale-residential.com",
+                    "filter": '("category_v2.slug_paths":"property-for-sale/residential")',
                     "hits": []
                 },
-                "rent_commercial": {
-                    "index": "property-for-rent-commercial.com",
-                    "filter": '("category_v2.slug_paths":"property-for-rent/commercial")',
+                "sale_multiple_units": {
+                    "index": "property-for-sale-multiple-units.com",
+                    "filter": '("categories_v2.slug_paths":"property-for-sale/multiple-units")',
                     "hits": []
                 },
-                "rent_rooms_rent_flatmates": {
-                    "index": "property-for-rent-rooms-for-rent-flatmates.com",
-                    "filter": '("category_v2.slug_paths":"property-for-rent/rooms-for-rent-flatmates")',
-                    "hits": []
-                },
-                "rent_holiday_homes": {
-                    "index": "property-for-rent-holiday-homes.com",
-                    "filter": '("categories.slug_paths":"property-for-rent/holiday-homes")',
-                    "hits": []
-                },
-                "rent_short_term_monthly": {
-                    "index": "property-for-rent-short-term.com",
-                    "filter": '("categories_v2.slug_paths":"property-for-rent/short-term")',
-                    "hits": []
-                },
-                "rent_short_term_daily": {
-                    "index": "property-for-rent-short-term-daily.com",
-                    "filter": '("category_v2.slug_paths":"property-for-rent/short-term-daily")',
-                    "hits": []
-                }
           }
 
           PAGES_PER_JOB = 50
@@ -316,12 +299,8 @@ jobs:
           }
 
           CATEGORIES = {
-              "rent_residential": {"index": "property-for-rent-residential.com", "filter": '("category_v2.slug_paths":"property-for-rent/residential")'},
-              "rent_commercial": {"index": "property-for-rent-commercial.com", "filter": '("category_v2.slug_paths":"property-for-rent/commercial")'},
-              "rent_rooms_rent_flatmates": {"index": "property-for-rent-rooms-for-rent-flatmates.com", "filter": '("category_v2.slug_paths":"property-for-rent/rooms-for-rent-flatmates")'},
-              "rent_holiday_homes": {"index": "property-for-rent-holiday-homes.com", "filter": '("categories.slug_paths":"property-for-rent/holiday-homes")'},
-              "rent_short_term_monthly": {"index": "property-for-rent-short-term.com", "filter": '("categories_v2.slug_paths":"property-for-rent/short-term")', "hits": []},
-              "rent_short_term_daily": {"index": "property-for-rent-short-term-daily.com", "filter": '("category_v2.slug_paths":"property-for-rent/short-term-daily")'},
+              "sale_residential": {"index": "property-for-sale-residential.com", "filter": '("category_v2.slug_paths":"property-for-sale/residential")'},
+              "sale_multiple_units": { "index": "property-for-sale-multiple-units.com", "filter": '("categories_v2.slug_paths":"property-for-sale/multiple-units")', "hits": [] },
           }
           
           ROWS_PER_BATCH = 2000
@@ -348,6 +327,7 @@ jobs:
 
               if nb_pages == 0:
                   continue
+
               #nb_pages = 2
               n_batches = math.ceil(nb_pages / PAGES_PER_BATCH)
               print(f"{category_name}: {nb_pages} pages -> {n_batches} batches")
@@ -452,7 +432,8 @@ jobs:
               exit(0)
 
           output_base = "output"
-          result = process_category(category, batch_jsonl, output_base, upload_images=True, phone_lookup=phone_lookup)
+          result = process_category(category, jsonl_files, output_base, upload_images=True,
+                                    enrich_contact_details = True, phone_lookup=phone_lookup)
           print(f"Batch processed: {result['total']} rows | {len(result['excel_files'])} excel files")
           
           if not result["excel_files"]:
@@ -482,12 +463,8 @@ jobs:
       max-parallel: 10
       matrix:
         category:
-          - rent_residential
-          - rent_commercial
-          - rent_rooms_rent_flatmates
-          - rent_holiday_homes
-          - rent_short_term_daily
-          - rent_short_term_monthly
+          - sale_residential
+          - sale_multiple_units
 
     steps:
       - name: Checkout repo
@@ -605,7 +582,7 @@ jobs:
               print(f"Uploaded JSON: {r2_key_json}")
 
               uploaded_count += 1
-
+          
           # REQUEST STATS
           def aggregate_request_stats(paths: list) -> dict:
               total_requests = 0
@@ -718,6 +695,7 @@ jobs:
 
           print(f"\nDONE: {uploaded_count} files uploaded for {category} | Total rows: {total_rows_all}")
           EOF
+        
 
 #   compress_images:
 #     runs-on: ubuntu-latest

@@ -1,0 +1,443 @@
+name: Jobs
+
+on:
+  workflow_run:
+    workflows: ["Sale (bach 2)"]
+    types:
+      - completed
+  workflow_dispatch:
+
+jobs:
+  detect_pages:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    outputs:
+      matrix: ${{ steps.build_matrix.outputs.matrix }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Detect pages and build matrix
+        id: build_matrix
+        run: |
+          python << 'EOF'
+          import json
+          import os
+          import requests
+
+          URL = "https://wd0ptz13zs-dsn.algolia.net/1/indexes/*/queries"
+          PARAMS = {
+              "x-algolia-agent": "Algolia for JavaScript (4.24.0); Browser (lite)",
+              "x-algolia-api-key": "cdd839b4fdac840289e88633779e8634",
+              "x-algolia-application-id": "WD0PTZ13ZS",
+          }
+
+          CATEGORIES = {
+                "jobs": {
+                    "index": "by_added_desc_jobs.com",
+                    "filter": '("category_v2.slug_paths":"jobs")',
+                    "hits": []
+                },
+                "jobs_wanted": {
+                    "index": "by_added_desc_jobs-wanted.com",
+                    "filter": '("category_v2.slug_paths":"jobs-wanted")',
+                    "hits": []
+                }
+          }
+
+          PAGES_PER_JOB = 50
+
+          matrix = {"include": []}
+
+          for category_name, category in CATEGORIES.items():
+              print(f"Detecting pages for {category_name}...")
+              try:
+                  payload = {
+                      "requests": [{
+                          "indexName": category["index"],
+                          "query": "",
+                          "params": f"page=0&hitsPerPage=35&filters={category['filter']}",
+                      }]
+                  }
+                  r = requests.post(URL, params=PARAMS, json=payload, timeout=30)
+                  data = r.json()
+                  nb_pages = data["results"][0]["nbPages"]
+                  #nb_pages = 2
+                  print(f"  {category_name}: {nb_pages} pages")
+              except Exception as e:
+                  print(f"  Failed: {e}")
+                  continue
+
+              if nb_pages == 0:
+                  continue
+
+              for i in range(0, nb_pages, PAGES_PER_JOB):
+                  start = i
+                  end = min(i + PAGES_PER_JOB - 1, nb_pages - 1)
+                  matrix["include"].append({
+                      "category": category_name,
+                      "start": start,
+                      "end": end
+                  })
+
+          print(f"Total jobs: {len(matrix['include'])}")
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"matrix={json.dumps(matrix)}\n")
+          EOF
+
+  scrape:
+    runs-on: ubuntu-latest
+    needs: detect_pages
+    strategy:
+      matrix: ${{ fromJson(needs.detect_pages.outputs.matrix) }}
+      max-parallel: 5
+      fail-fast: false
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run scraper with retry
+        run: |
+          python -u main.py "${{ matrix.category }}" ${{ matrix.start }} ${{ matrix.end }}
+
+      - name: Upload raw data artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-${{ matrix.category }}-${{ matrix.start }}-${{ matrix.end }}
+          path: |
+            ${{ matrix.category }}_${{ matrix.start }}_${{ matrix.end }}.jsonl
+            ${{ matrix.category }}_${{ matrix.start }}_${{ matrix.end }}_failed.txt
+            ${{ matrix.category }}_${{ matrix.start }}_${{ matrix.end }}_result.json
+            request_stats_${{ matrix.start }}_${{ matrix.end }}.json
+          if-no-files-found: ignore
+
+  # jobs / jobs_wanted are small enough that batching + a separate
+  # final_merge combine stage isn't needed -- one job per category
+  # downloads all its raw parts and uploads straight to R2.
+  merge:
+    runs-on: ubuntu-latest
+    needs: scrape
+
+    strategy:
+      max-parallel: 5
+      matrix:
+        category:
+          - jobs
+          - jobs_wanted
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pandas openpyxl boto3 requests pillow python-dotenv
+
+      - name: Download raw data for ${{ matrix.category }}
+        uses: actions/download-artifact@v4
+        with:
+          pattern: raw-${{ matrix.category }}-*
+          merge-multiple: true
+          path: raw_parts/
+
+      - name: Process and upload to R2
+        env:
+          CF_R2_ACCESS_KEY_ID: ${{ secrets.CF_R2_ACCESS_KEY_ID }}
+          CF_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_R2_SECRET_ACCESS_KEY }}
+          CF_R2_ENDPOINT_URL: ${{ secrets.CF_R2_ENDPOINT_URL }}
+          CF_R2_BUCKET_NAME: ${{ secrets.CF_R2_BUCKET_NAME }}
+        run: |
+          python << 'EOF'
+          import glob
+          import os
+          import json
+          import re
+          import boto3
+          from datetime import datetime
+          from dub_writer import process_category
+
+          category = "${{ matrix.category }}"
+          jsonl_files = glob.glob('raw_parts/*.jsonl')
+
+          dt = datetime.now()
+          date_prefix = f"year={dt.year}/month={dt.strftime('%m')}/day={dt.strftime('%d')}"
+
+          client = boto3.client('s3',
+              endpoint_url=os.environ['CF_R2_ENDPOINT_URL'],
+              aws_access_key_id=os.environ['CF_R2_ACCESS_KEY_ID'],
+              aws_secret_access_key=os.environ['CF_R2_SECRET_ACCESS_KEY'],
+              region_name='auto'
+          )
+          bucket = os.environ['CF_R2_BUCKET_NAME']
+
+          if not jsonl_files:
+              print(f"No raw data found for {category}")
+              exit(0)
+
+          # Failed pages + total pages across all parts for this category
+          failed_pages = []
+          total_pages = 0
+
+          for f in jsonl_files:
+              match = re.search(r'_(\d+)_(\d+)\.jsonl$', f)
+              if match:
+                  start, end = int(match.group(1)), int(match.group(2))
+                  total_pages += (end - start + 1)
+
+              failed_file = f.replace('.jsonl', '_failed.txt')
+              if os.path.exists(failed_file):
+                  with open(failed_file, 'r', encoding='utf-8') as ff:
+                      for line in ff:
+                          if line.startswith('page='):
+                              try:
+                                  failed_pages.append(int(line.split('=')[1]))
+                              except Exception:
+                                  pass
+
+          failed_percentage = (len(failed_pages) / total_pages * 100) if total_pages > 0 else 0
+
+          output_base = "output"
+          result = process_category(category, jsonl_files, output_base, upload_images=True,
+                                    enrich_contact_details = True)
+
+          print(f"\nCategory: {category} | Total rows: {result['total']} | Excel files: {len(result['excel_files'])}")
+          print(f"Total Pages: {total_pages} | Failed Pages: {len(failed_pages)} | Failed: {failed_percentage:.2f}%")
+
+          if not result["excel_files"]:
+              print("No output files generated.")
+              exit(0)
+
+          # Upload Excel files -- DUAE/{date}/{cat0}/excel/{filename}.xlsx
+          for local_path in result["excel_files"]:
+              relative_path = os.path.relpath(local_path, output_base)
+              r2_key = f"DUAE/{date_prefix}/{relative_path.replace(os.sep, '/')}"
+              client.upload_file(local_path, bucket, r2_key,
+                  ExtraArgs={'ContentType': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})
+              print(f"Uploaded Excel: {r2_key}")
+
+          # Upload JSON files
+          for local_path in result["json_files"]:
+              relative_path = os.path.relpath(local_path, output_base)
+              r2_key = f"DUAE/{date_prefix}/{relative_path.replace(os.sep, '/')}"
+              client.upload_file(local_path, bucket, r2_key,
+                  ExtraArgs={'ContentType': 'application/json; charset=utf-8'})
+              print(f"Uploaded JSON: {r2_key}")
+
+          # Upload summary.json (one per cat0 group)
+          for root, dirs, files in os.walk(output_base):
+              for file in files:
+                  if file == 'summary.json':
+                      local_path = os.path.join(root, file)
+                      relative_path = os.path.relpath(local_path, output_base)
+                      r2_key = f"DUAE/{date_prefix}/{relative_path.replace(os.sep, '/')}"
+                      client.upload_file(local_path, bucket, r2_key,
+                          ExtraArgs={'ContentType': 'application/json; charset=utf-8'})
+                      print(f"Uploaded summary: {r2_key}")
+
+          # failed.json + request_metrics.json, uploaded next to each cat0's summary.json
+          def aggregate_request_stats(stats_glob):
+              total_requests = 0
+              total_duration_min = 0.0
+              for f in glob.glob(stats_glob):
+                  with open(f, 'r', encoding='utf-8') as fh:
+                      stats = json.load(fh)
+                  total_requests += stats.get('total_requests', 0)
+                  total_duration_min += stats.get('total_duration_min', 0) or 0
+              requests_per_min = round(total_requests / total_duration_min, 2) if total_duration_min > 0 else total_requests
+              return {
+                  "requests_total": total_requests,
+                  "duration_sec": round(total_duration_min * 60, 2),
+                  "requests_per_min": requests_per_min,
+              }
+
+          failed_pages.sort()
+          failed_report = {
+              "category": category,
+              "total_pages_attempted": total_pages,
+              "total_failed": len(failed_pages),
+              "failed_percentage": round(failed_percentage, 2),
+              "failed_pages": failed_pages,
+          }
+          metrics = aggregate_request_stats('raw_parts/request_stats_*.json')
+
+          cat0_dirs = set()
+          for local_path in result["excel_files"]:
+              relative_path = os.path.relpath(local_path, output_base)
+              parts = relative_path.replace(os.sep, '/').split('/')
+              cat0_dirs.add(parts[0])
+
+          for cat0 in cat0_dirs:
+              failed_key = f"DUAE/{date_prefix}/{cat0}/summary/failed.json"
+              client.put_object(Bucket=bucket, Key=failed_key,
+                  Body=json.dumps(failed_report, ensure_ascii=False, indent=2).encode('utf-8'),
+                  ContentType='application/json; charset=utf-8')
+              print(f"Uploaded: {failed_key}")
+
+              metrics_key = f"DUAE/{date_prefix}/{cat0}/summary/request_metrics.json"
+              client.put_object(Bucket=bucket, Key=metrics_key,
+                  Body=json.dumps(metrics, ensure_ascii=False, indent=2).encode('utf-8'),
+                  ContentType='application/json; charset=utf-8')
+              print(f"Uploaded: {metrics_key}")
+
+          print(f"\nDONE: {len(result['excel_files'])} excel + {len(result['json_files'])} json files uploaded for {category}")
+          EOF
+
+#   compress_images:
+#     runs-on: ubuntu-latest
+#     needs: merge
+
+#     steps:
+#       - uses: actions/checkout@v4
+
+#       - uses: actions/setup-python@v5
+#         with:
+#           python-version: "3.11"
+
+#       - run: pip install boto3
+
+#       - name: Compress images
+#         env:
+#           CF_R2_ACCESS_KEY_ID: ${{ secrets.CF_R2_ACCESS_KEY_ID }}
+#           CF_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_R2_SECRET_ACCESS_KEY }}
+#           CF_R2_ENDPOINT_URL: ${{ secrets.CF_R2_ENDPOINT_URL }}
+#           CF_R2_BUCKET_NAME: ${{ secrets.CF_R2_BUCKET_NAME }}
+#         run: |
+#             python << 'EOF'
+#             import os
+#             import io
+#             import boto3
+#             import zipfile
+#             from datetime import datetime
+#             from collections import defaultdict
+
+#             dt = datetime.now()
+#             date_prefix = f"year={dt.year}/month={dt.strftime('%m')}/day={dt.strftime('%d')}"
+
+#             client = boto3.client(
+#                 "s3",
+#                 endpoint_url=os.environ["CF_R2_ENDPOINT_URL"],
+#                 aws_access_key_id=os.environ["CF_R2_ACCESS_KEY_ID"],
+#                 aws_secret_access_key=os.environ["CF_R2_SECRET_ACCESS_KEY"],
+#                 region_name="auto",
+#             )
+
+#             bucket = os.environ["CF_R2_BUCKET_NAME"]
+
+#             base_prefix = f"DUAE/{date_prefix}/"
+
+#             all_image_keys = []
+
+#             paginator = client.get_paginator("list_objects_v2")
+#             for page in paginator.paginate(Bucket=bucket, Prefix=base_prefix):
+#                 for obj in page.get("Contents", []):
+#                     key = obj["Key"]
+#                     if "/images/" in key and not key.endswith(".zip"):
+#                         all_image_keys.append(key)
+
+#             if not all_image_keys:
+#                 print("No images found to compress")
+#                 exit(0)
+
+#             images_by_folder = defaultdict(list)
+
+#             for key in all_image_keys:
+#                 folder = key.rsplit("/", 1)[0]
+#                 images_by_folder[folder].append(key)
+
+#             print(f"Found {len(images_by_folder)} image folders to compress")
+
+#             for folder, keys in images_by_folder.items():
+
+#                 print(f"\nCompressing {len(keys)} images in {folder}...")
+
+#                 with io.BytesIO() as zip_buffer:
+
+#                     uploaded_count = 0
+
+#                     with zipfile.ZipFile(
+#                         zip_buffer,
+#                         mode="w",
+#                         compression=zipfile.ZIP_DEFLATED,
+#                     ) as zf:
+
+#                         for key in keys:
+
+#                             filename = key.rsplit("/", 1)[-1]
+
+#                             try:
+#                                 obj = client.get_object(Bucket=bucket, Key=key)
+#                                 body = obj["Body"]
+
+#                                 try:
+#                                     zf.writestr(filename, body.read())
+#                                     uploaded_count += 1
+#                                 finally:
+#                                     body.close()
+
+#                             except Exception as e:
+#                                 print(f"    [ERROR] Failed to read {key}: {e}")
+
+#                     if uploaded_count == 0:
+#                         print("    No images were added to the zip, skipping folder.")
+#                         continue
+
+#                     zip_buffer.seek(0)
+
+#                     zip_r2_key = f"{folder}/images.zip"
+
+#                     client.upload_fileobj(
+#                         zip_buffer,
+#                         bucket,
+#                         zip_r2_key,
+#                         ExtraArgs={
+#                             "ContentType": "application/zip"
+#                         },
+#                     )
+
+#                     response = client.head_object(
+#                         Bucket=bucket,
+#                         Key=zip_r2_key,
+#                     )
+
+#                     print(
+#                         f"    Uploaded zip: {zip_r2_key} "
+#                         f"({uploaded_count} images, {response['ContentLength']} bytes)"
+#                     )
+
+#                     delete_objects = [{"Key": k} for k in keys]
+
+#                     for i in range(0, len(delete_objects), 1000):
+#                         client.delete_objects(
+#                             Bucket=bucket,
+#                             Delete={
+#                                 "Objects": delete_objects[i:i + 1000]
+#                             },
+#                         )
+
+#                     print(f"    Deleted {len(keys)} individual images from {folder}")
+
+#             print("\nDONE: Compressed all image folders")
+#             EOF

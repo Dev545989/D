@@ -4,11 +4,16 @@ import ast
 import os
 import re
 import io
+import random
+import time
 import requests as req
 from PIL import Image
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from r2_uploader import upload_buffer
 from datetime import datetime, timedelta, timezone
+
+from playwright.sync_api import sync_playwright
+from playwright_stealth import Stealth
 
 
 PROPERTY_CATEGORIES = {
@@ -83,19 +88,25 @@ def build_property_meta(names_en: list) -> dict:
 
 
 def build_job_meta(names_en: list, category_name: str) -> dict:
+    """
+    category_v2.names_en for job listings is ordered top -> leaf,
+    e.g. ['Jobs Wanted', 'Engineering', 'Civil Engineering'].
+
+    cat0     = top-level folder         (names_en[0], e.g. "Jobs Wanted"/"Jobs")
+    filename = the {filename}.xlsx/json (names_en[1], e.g. "Engineering";
+               falls back to names_en[0] when there's no level below it)
+    sheet    = sheet inside that file   (names_en[2], the deepest leaf,
+               e.g. "Civil Engineering"; equals filename itself when
+               there's no deeper level, e.g. ['Jobs', 'Manufacturing / Warehouse'])
+    """
     if not names_en:
-        return {"cat0": category_name, "filename": category_name, "sheet": "Other"}
+        return {"cat0": category_name, "filename": "Other", "sheet": "Other"}
 
     top = names_en[0]
+    filename_source = names_en[1] if len(names_en) >= 2 else names_en[0]
+    sheet_source = names_en[2] if len(names_en) >= 3 else filename_source
 
-    if len(names_en) >= 3:
-        sheet = f"{names_en[1]} ({names_en[2]})"
-    elif len(names_en) == 2:
-        sheet = names_en[1]
-    else:
-        sheet = "Other"
-
-    return {"cat0": top, "filename": top, "sheet": sheet}
+    return {"cat0": top, "filename": filename_source, "sheet": sheet_source}
 
 
 def extract_image_urls(row: pd.Series) -> list:
@@ -105,8 +116,8 @@ def extract_image_urls(row: pd.Series) -> list:
     if "photos" in row and isinstance(row["photos"], list):
         urls = []
         for item in row["photos"]:
-            if isinstance(item, dict) and item.get("thumb"):
-                urls.append(item["thumb"])
+            if isinstance(item, dict) and item.get("main"):
+                urls.append(item["main"])
         return urls
 
     return []
@@ -181,6 +192,81 @@ def split_off_plan(df: pd.DataFrame) -> dict:
         "sale_residential": rest_df,
     }
 
+def _get_english_url(absolute_url_value):
+    parsed = parse_dict_field(absolute_url_value)
+    if isinstance(parsed, dict):
+        return parsed.get("en") or parsed.get("ar")
+    if isinstance(absolute_url_value, str):
+        return absolute_url_value
+    return None
+
+DESCRIPTION_SELECTORS = [
+    '[data-testid="description"]',
+    '[data-testid="description-heading"]',
+]
+
+def _extract_description(page):
+    for selector in DESCRIPTION_SELECTORS:
+        try:
+            loc = page.locator(selector).first
+            if loc.is_visible(timeout=3000):
+                text = loc.inner_text()
+                if text:
+                    return text
+        except Exception:
+            continue
+    return None
+
+def enrich_with_description(
+    df: pd.DataFrame,
+    url_column: str = "absolute_url",
+    headless: bool = True,
+    min_delay: float = 5,
+    max_delay: float = 12,
+) -> pd.DataFrame:
+    df = df.copy()
+    description_col = [None] * len(df)
+
+    with Stealth().use_sync(sync_playwright()) as p:
+        browser = p.chromium.launch(headless=headless, channel="chrome")
+        context = browser.new_context(
+            viewport={"width": 1920, "height": 1080},
+            locale="en-US",
+            timezone_id="Asia/Dubai",
+        )
+        page = context.new_page()
+
+        for pos, (idx, row) in enumerate(df.iterrows()):
+            url = _get_english_url(row.get(url_column))
+            if not url:
+                print(f"  [{pos + 1}/{len(df)}] Skipped - no URL")
+                continue
+
+            print(f"  [{pos + 1}/{len(df)}] Visiting: {url}")
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                page.wait_for_timeout(random.uniform(1500, 3000))
+
+                html = page.content()
+                if "Pardon Our Interruption" in html:
+                    print("    -> Imperva challenge hit, stopping enrichment.")
+                    break
+
+                description_col[pos] = _extract_description(page)
+
+            except Exception as e:
+                print(f"    -> FAILED: {e}")
+
+            if pos < len(df) - 1:
+                delay = random.uniform(min_delay, max_delay)
+                time.sleep(delay)
+
+        page.close()
+        browser.close()
+    df["description_full"] = description_col
+    return df
+
+
 def download_images(images: list, id_prod: str = "", category: str = "", cat0: str = "") -> list:
     r2_paths = []
     uploaded = 0
@@ -200,7 +286,7 @@ def download_images(images: list, id_prod: str = "", category: str = "", cat0: s
             if r.status_code == 200:
                 img = Image.open(io.BytesIO(r.content))
                 img = img.convert("RGB")
-                img.thumbnail((MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION), Image.LANCZOS)
+                #img.thumbnail((MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION), Image.LANCZOS)
                 output_buffer = io.BytesIO()
                 img.save(output_buffer, format="WEBP", quality=WEBP_QUALITY, method=6)
                 output_buffer.seek(0)
@@ -311,7 +397,6 @@ def build_group_summary(file_groups: dict, group_df: pd.DataFrame, cat0: str, dt
         "total_listings": len(group_df),
         "subcategories": subcategories,
     }
-
 def convert_timestamp_columns(df: pd.DataFrame) -> pd.DataFrame:
     timestamp_columns = [
         "added",
@@ -335,6 +420,7 @@ def convert_timestamp_columns(df: pd.DataFrame) -> pd.DataFrame:
             print(f"  Converted timestamp column: {col}")
 
     return df
+
 def _process_category_internal(category_name: str, df: pd.DataFrame, output_base_dir: str,
                                  upload_images: bool, image_workers: int) -> dict:
     if df.empty:
@@ -418,13 +504,17 @@ def _process_category_internal(category_name: str, df: pd.DataFrame, output_base
 
 def process_category(category_name: str, jsonl_files: list, output_base_dir: str,
                       upload_images: bool = True, image_workers: int = 4,
+                      enrich_contact_details: bool = False,
                       phone_lookup: dict = None) -> dict:
     df = load_all_hits(jsonl_files)
-
     if df.empty:
         return {"total": 0, "excel_files": [], "json_files": []}
 
     df = convert_timestamp_columns(df)
+
+    if enrich_contact_details and "absolute_url" in df.columns:
+        print(f"  Enriching {len(df)} rows with description_full...")
+        df = enrich_with_description(df)
 
     if phone_lookup:
         agent_info = df.apply(extract_agent_slug, axis=1, result_type="expand")
