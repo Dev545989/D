@@ -301,6 +301,8 @@ def enrich_profiles_with_phone(
 
 if __name__ == "__main__":
     import argparse
+    from pathlib import Path
+
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--start", type=int, default=0)
@@ -311,7 +313,12 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    profiles_df = pd.read_csv(args.input)[args.start:args.end]
+    ext = Path(args.input).suffix.lower()
+
+    if ext == ".xlsx":
+        profiles_df = pd.read_excel(args.input)
+    else:
+        profiles_df = pd.read_csv(args.input)
 
     result_df = enrich_profiles_with_phone(
         profiles_df,
