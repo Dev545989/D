@@ -29,10 +29,6 @@ COLUMNS_TO_DROP = ["tag_slugs", "category", "category_slug_tree", "category_tree
                   "site_categories_slug_tree", "permalink", "short_url", "short_url_v2",
                   "rent_is_paid", "_highlightResult", "categories", "photo"]
 
-# Long-edge cap (px) images are downscaled to before upload, plus the WEBP
-# quality used when re-encoding. Most source photos are 3000px+ wide;
-# capping the long edge is what actually cuts stored bytes -- quality alone
-# only goes so far.
 MAX_IMAGE_DIMENSION = 1280
 WEBP_QUALITY = 65
 
@@ -64,19 +60,6 @@ def sanitize_name(name: str) -> str:
 
 
 def build_property_meta(names_en: list) -> dict:
-    """
-    category_v2.names_en for property listings is ordered leaf -> top,
-    e.g. ['Commercial Building', 'Commercial', 'Property for Sale'].
-
-    cat0     = top-level folder            (names_en[-1], e.g. "Property for Sale")
-    filename = the {filename}.xlsx/json    (names_en[-2], e.g. "Commercial";
-               falls back to names_en[0] itself when there's no level above it,
-               e.g. ['Land', 'Property for Sale'] -> filename "Land")
-    sheet    = sheet inside that file       (names_en[0], the deepest leaf,
-               e.g. "Commercial Building"; equals filename itself when there's
-               no deeper level, so a single-sheet file still gets one sheet
-               named after itself instead of "Other")
-    """
     if not names_en:
         return {"cat0": "Property", "filename": "Other", "sheet": "Other"}
 
@@ -88,17 +71,6 @@ def build_property_meta(names_en: list) -> dict:
 
 
 def build_job_meta(names_en: list, category_name: str) -> dict:
-    """
-    category_v2.names_en for job listings is ordered top -> leaf,
-    e.g. ['Jobs Wanted', 'Engineering', 'Civil Engineering'].
-
-    cat0     = top-level folder         (names_en[0], e.g. "Jobs Wanted"/"Jobs")
-    filename = the {filename}.xlsx/json (names_en[1], e.g. "Engineering";
-               falls back to names_en[0] when there's no level below it)
-    sheet    = sheet inside that file   (names_en[2], the deepest leaf,
-               e.g. "Civil Engineering"; equals filename itself when
-               there's no deeper level, e.g. ['Jobs', 'Manufacturing / Warehouse'])
-    """
     if not names_en:
         return {"cat0": category_name, "filename": "Other", "sheet": "Other"}
 
@@ -121,28 +93,6 @@ def extract_image_urls(row: pd.Series) -> list:
         return urls
 
     return []
-
-
-AGENT_PROFILE_FIELDS = [
-    ("agent_profile", "agent"),   # individual agent -> property-agents/{slug}/
-    ("agent", "agency"),          # agency -> property-agencies/{slug}/
-]
-
-
-def extract_agent_slug(row: pd.Series):
-    """
-    A listing is posted either by an individual agent (row['agent_profile'])
-    or an agency (row['agent']). Returns (profile_type, slug) for whichever
-    is present, or (None, None) if neither field has a usable slug.
-    """
-    for field_name, profile_type in AGENT_PROFILE_FIELDS:
-        value = row.get(field_name)
-        parsed = parse_dict_field(value) if not isinstance(value, dict) else value
-        if isinstance(parsed, dict):
-            slug = parsed.get("slug")
-            if slug:
-                return profile_type, slug
-    return None, None
 
 
 def generate_data_quality_report(df: pd.DataFrame, total_rows: int) -> str:
@@ -192,6 +142,13 @@ def split_off_plan(df: pd.DataFrame) -> dict:
         "sale_residential": rest_df,
     }
 
+
+DESCRIPTION_SELECTORS = [
+    '[data-testid="description"]',
+    '[data-testid="description-heading"]',
+]
+
+
 def _get_english_url(absolute_url_value):
     parsed = parse_dict_field(absolute_url_value)
     if isinstance(parsed, dict):
@@ -200,10 +157,6 @@ def _get_english_url(absolute_url_value):
         return absolute_url_value
     return None
 
-DESCRIPTION_SELECTORS = [
-    '[data-testid="description"]',
-    '[data-testid="description-heading"]',
-]
 
 def _extract_description(page):
     for selector in DESCRIPTION_SELECTORS:
@@ -216,6 +169,7 @@ def _extract_description(page):
         except Exception:
             continue
     return None
+
 
 def enrich_with_description(
     df: pd.DataFrame,
@@ -278,6 +232,7 @@ def download_images(images: list, id_prod: str = "", category: str = "", cat0: s
     ext = "webp"
     file_prefix = id_prod or "unknown"
     category_display = cat0
+    today = datetime.now(timezone.utc)
 
     for idx, img_url in enumerate(images, start=1):
         filename = f"{file_prefix}-{idx}.{ext}"
@@ -286,7 +241,6 @@ def download_images(images: list, id_prod: str = "", category: str = "", cat0: s
             if r.status_code == 200:
                 img = Image.open(io.BytesIO(r.content))
                 img = img.convert("RGB")
-                #img.thumbnail((MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION), Image.LANCZOS)
                 output_buffer = io.BytesIO()
                 img.save(output_buffer, format="WEBP", quality=WEBP_QUALITY, method=6)
                 output_buffer.seek(0)
@@ -298,7 +252,7 @@ def download_images(images: list, id_prod: str = "", category: str = "", cat0: s
                     category=category,
                     file_type="images",
                     content_type="image/webp",
-                    dt=None,
+                    dt=today,
                     category_display=category_display
                 )
                 if r2_key:
@@ -371,32 +325,130 @@ def _write_excel_and_json(sheets: dict, xlsx_path: str, json_path: str) -> tuple
     return xlsx_path, json_path
 
 
-def build_group_summary(file_groups: dict, group_df: pd.DataFrame, cat0: str, dt: datetime) -> dict:
+# =============================================================================
+# Summary helpers (DKSA-style)
+# =============================================================================
+
+def format_failed_summary(failed_items: list, max_len: int = 400) -> str | None:
+    """Format failed items into a short summary string."""
+    if not failed_items:
+        return None
+    parts = []
+    for item in failed_items[:12]:
+        name = item.get("name", "?")
+        count = item.get("errors", 0)
+        detail = item.get("detail", "")
+        bit = f"{name}: {count} error(s)"
+        if detail:
+            bit += f" ({detail})"
+        parts.append(bit)
+    text = "; ".join(parts)
+    if len(failed_items) > 12:
+        text += f"; +{len(failed_items) - 12} more"
+    return text[:max_len]
+
+
+def read_request_stats(category_name: str, output_base_dir: str) -> dict:
+    """Read request_stats_{category_name}.json if it exists."""
+    stats_file = os.path.join(output_base_dir, f"request_stats_{category_name}.json")
+    if os.path.exists(stats_file):
+        with open(stats_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
+def read_failed_pages(category_name: str, output_base_dir: str) -> list:
+    """Read failed_pages_{category_name}.json if it exists."""
+    failed_file = os.path.join(output_base_dir, f"failed_pages_{category_name}.json")
+    if os.path.exists(failed_file):
+        with open(failed_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data.get("failed_pages", [])
+    return []
+
+
+def build_group_summary(
+    file_groups: dict,
+    group_df: pd.DataFrame,
+    cat0: str,
+    dt: datetime,
+    category_name: str,
+    output_base_dir: str,
+) -> dict:
     """
-    file_groups: {filename -> full df for that file} -- one entry per
-    {filename}.xlsx written under this cat0 (e.g. "Residential",
-    "Commercial", "Land"), NOT per internal sheet.
+    Build a DKSA-style summary.json.
     """
     subcategories = [
         {
             "name_ar": "",
             "name_en": name,
-            "slug": name,
+            "slug": sanitize_name(name),
             "listings_count": len(fdf),
             "has_subcategories": False,
             "subcategories": [],
         }
         for name, fdf in file_groups.items()
     ]
+
+    stats_data = read_request_stats(category_name, output_base_dir)
+    request_metrics = {}
+    requests_duration_sec = None
+
+    if stats_data:
+        duration_min = stats_data.get("total_duration_min", 0)
+        if duration_min:
+            requests_duration_sec = duration_min * 60
+
+        request_metrics = {
+            "requests_total": stats_data.get("total_requests", 0),
+            "requests_failed": 0,
+            "duration_sec": stats_data.get("total_duration", 0),
+            "requests_per_min": stats_data.get("total_req_per_min", 0),
+            "requests_duration_sec": requests_duration_sec,
+        }
+
+    failed_pages = read_failed_pages(category_name, output_base_dir)
+    total_failed = len(failed_pages)
+    request_metrics["requests_failed"] = total_failed
+
+    failed_items = []
+    for page in failed_pages:
+        failed_items.append({
+            "name": f"{page.get('category', 'unknown')}-page-{page.get('page', '?')}",
+            "errors": 1,
+            "detail": page.get("error", "Unknown error")
+        })
+
+    total_requests = request_metrics.get("requests_total", 0)
+    if total_requests > 0:
+        request_metrics["error_rate_pct"] = round(total_failed / total_requests * 100, 2)
+    else:
+        request_metrics["error_rate_pct"] = None
+
+    if requests_duration_sec and requests_duration_sec > 0:
+        request_metrics["requests_per_min"] = round(
+            request_metrics["requests_total"] / (requests_duration_sec / 60.0), 2
+        )
+
     return {
         "scraped_at": dt.isoformat(),
-        "data_scraped_date": (dt - timedelta(days=1)).strftime("%Y-%m-%d"),
+        "data_scraped_date": dt.strftime("%Y-%m-%d"),
         "saved_to_R2_date": dt.strftime("%Y-%m-%d"),
-        "category": cat0,
+        "category": {
+            "name_ar": cat0,
+            "name_en": cat0,
+            "slug": sanitize_name(cat0),
+        },
+        "workflow_name": "Rent Property",
         "total_subcategories": len(subcategories),
         "total_listings": len(group_df),
         "subcategories": subcategories,
+        "request_metrics": request_metrics,
+        "failed_items": failed_items,
+        "failed_items_summary": format_failed_summary(failed_items),
     }
+
+
 def convert_timestamp_columns(df: pd.DataFrame) -> pd.DataFrame:
     timestamp_columns = [
         "added",
@@ -421,8 +473,14 @@ def convert_timestamp_columns(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
-def _process_category_internal(category_name: str, df: pd.DataFrame, output_base_dir: str,
-                                 upload_images: bool, image_workers: int) -> dict:
+
+def _process_category_internal(
+    category_name: str,
+    df: pd.DataFrame,
+    output_base_dir: str,
+    upload_images: bool,
+    image_workers: int,
+) -> dict:
     if df.empty:
         return {"excel_files": [], "json_files": []}
 
@@ -472,7 +530,7 @@ def _process_category_internal(category_name: str, df: pd.DataFrame, output_base
         os.makedirs(json_dir, exist_ok=True)
         os.makedirs(summary_dir, exist_ok=True)
 
-        file_groups = {}  # filename -> full df, for summary.json counts
+        file_groups = {}
 
         for filename, f_df in group_df.groupby("_filename"):
             safe_filename = sanitize_name(filename)
@@ -493,7 +551,14 @@ def _process_category_internal(category_name: str, df: pd.DataFrame, output_base
             file_groups[safe_filename] = f_df
 
         dt = datetime.now(timezone.utc)
-        summary = build_group_summary(file_groups, group_df, safe_cat0, dt)
+        summary = build_group_summary(
+            file_groups,
+            group_df,
+            safe_cat0,
+            dt,
+            category_name,
+            output_base_dir,
+        )
         summary_file_path = os.path.join(summary_dir, "summary.json")
         with open(summary_file_path, "w", encoding="utf-8") as f:
             json.dump(summary, f, ensure_ascii=False, indent=2)
@@ -502,10 +567,14 @@ def _process_category_internal(category_name: str, df: pd.DataFrame, output_base
     return {"excel_files": excel_files, "json_files": json_files}
 
 
-def process_category(category_name: str, jsonl_files: list, output_base_dir: str,
-                      upload_images: bool = True, image_workers: int = 4,
-                      enrich_contact_details: bool = False,
-                      phone_lookup: dict = None) -> dict:
+def process_category(
+    category_name: str,
+    jsonl_files: list,
+    output_base_dir: str,
+    upload_images: bool = False,
+    image_workers: int = 4,
+    enrich_contact_details: bool = False,
+) -> dict:
     df = load_all_hits(jsonl_files)
     if df.empty:
         return {"total": 0, "excel_files": [], "json_files": []}
@@ -515,13 +584,6 @@ def process_category(category_name: str, jsonl_files: list, output_base_dir: str
     if enrich_contact_details and "absolute_url" in df.columns:
         print(f"  Enriching {len(df)} rows with description_full...")
         df = enrich_with_description(df)
-
-    if phone_lookup:
-        agent_info = df.apply(extract_agent_slug, axis=1, result_type="expand")
-        agent_info.columns = ["_agent_profile_type", "_agent_slug"]
-        df["contact_phone_number"] = agent_info["_agent_slug"].map(phone_lookup)
-        matched = df["contact_phone_number"].notna().sum()
-        print(f"  Matched phone numbers for {matched}/{len(df)} rows from phone_lookup")
 
     total = len(df)
     excel_files = []
