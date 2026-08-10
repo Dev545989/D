@@ -640,7 +640,7 @@ jobs:
                       "saved_to_R2_date": s.get("saved_to_R2_date"),
                       "category": s.get("category", {}),
                       "category_path": cp,
-                      "workflow_name": "Sale Property",
+                      "workflow_name": "Rent Property and Jobs",
                       "total_listings": 0,
                       "subcats": {},
                       "failed_items": [],
@@ -739,4 +739,4 @@ jobs:
           CF_R2_BUCKET_NAME: ${{ secrets.CF_R2_BUCKET_NAME }}
           WORKFLOW_DURATION: ${{ steps.workflow_duration.outputs.duration_sec }}
         run: |
-          python finalize_summaries.py --summaries-dir summaries/ --workflow "Sale Property" --aggregate
+          python finalize_summaries.py --summaries-dir summaries/ --workflow "Rent Property and Jobs" --aggregate
