@@ -1,0 +1,1368 @@
+meta:
+  website: uae.dubizzle.com           # All scrapers target this domain
+  country: United Arab Emirates
+  github_username1: "devops5796-netizen"
+  github_username2: "Dev545989"
+  github_username3: "work59"
+  repo1: DUAE                             # Single repo confirmed from workspace
+  repo2: D
+  repo3: duae
+  run_environment: GitHub Actions      # All pipelines run on ubuntu-22.04
+  r2_bucket: "data-collection-dl"      # Your R2 bucket name (same as CF_R2_BUCKET_NAME secret)
+  r2_prefix: "DUAE"                    # Fixed prefix inside the bucket
+
+# ------------------------------------------------------------
+# SCRAPERS — 11 categories across 1 batche
+# ------------------------------------------------------------
+scrapers:
+  - name: used_cars
+    url: https://uae.dubizzle.com/motors/used-cars/
+    batch: "DUAE"
+    workflow_file: Motors.yml
+    r2_path: "{r2_bucket}/DUAE/Motors/used_cars"
+
+  - name: new_cars
+    url: https://uae.dubizzle.com/motors/new-cars/
+    batch: "DUAE"
+    workflow_file: Motors.yml
+    r2_path: "{r2_bucket}/DUAE/Motors/new_cars"
+
+  - name: export_cars
+    url: https://uae.dubizzle.com/motors/export-cars/
+    batch: "DUAE"
+    workflow_file: Motors.yml
+    r2_path: "{r2_bucket}/DUAE/Motors/export_cars"
+
+  - name: rental_cars
+    url: https://uae.dubizzle.com/motors/rental-cars/
+    batch: "DUAE"
+    workflow_file: Motors.yml
+    r2_path: "{r2_bucket}/DUAE/Motors/rental_cars"
+
+  - name: motorcycles
+    url: https://uae.dubizzle.com/motors/motorcycles/
+    batch: "DUAE"
+    workflow_file: Motors.yml
+    r2_path: "{r2_bucket}/DUAE/Motors/motorcycles"
+
+  - name: auto_accessories_parts
+    url: https://uae.dubizzle.com/motors/auto-accessories-parts/
+    batch: "DUAE"
+    workflow_file: Motors.yml
+    r2_path: "{r2_bucket}/DUAE/Motors/auto_accessories_parts"
+
+  - name: heavy_vehicles
+    url: https://uae.dubizzle.com/motors/heavy-vehicles/
+    batch: "DUAE"
+    workflow_file: Motors.yml
+    r2_path: "{r2_bucket}/DUAE/Motors/heavy_vehicles"
+
+  - name: boats
+    url: https://uae.dubizzle.com/motors/boats/
+    batch: "DUAE"
+    workflow_file: Motors.yml
+    r2_path: "{r2_bucket}/DUAE/Motors/boats"
+
+  - name: number_plates
+    url: https://uae.dubizzle.com/motors/number-plates/
+    batch: "DUAE"
+    workflow_file: Motors.yml
+    r2_path: "{r2_bucket}/DUAE/Motors/number_plates"
+
+  - name: electronics
+    url: https://uae.dubizzle.com/classified/electronics/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Classifieds/electronics"
+  
+  - name: computers_networking
+    url: https://uae.dubizzle.com/classified/computers-networking/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Classifieds/computers_networking"
+
+  - name: business_industrial
+    url: https://uae.dubizzle.com/classified/business-industrial/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Classifieds/business_industrial"
+
+  - name: home_appliances
+    url: https://uae.dubizzle.com/classified/home-appliances/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Classifieds/home_appliances"
+
+  - name: sports_equipment
+    url: https://uae.dubizzle.com/classified/sports-equipment/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Classifieds/sports_equipment"
+
+  - name: clothing_accessories
+    url: https://uae.dubizzle.com/classified/clothing-accessories/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Classifieds/clothing_accessories"
+
+  - name: cameras_imaging
+    url: https://uae.dubizzle.com/classified/cameras-imaging/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Classifieds/cameras_imaging"
+
+  - name: jewelry_watches
+    url: https://uae.dubizzle.com/classified/jewelry-watches/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Classifieds/jewelry_watches"
+
+  - name: pets
+    url: https://uae.dubizzle.com/classified/pets/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Classifieds/pets"
+
+  - name: musical_instruments
+    url: https://uae.dubizzle.com/classified/musical-instruments/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Classifieds/musical_instruments"
+
+  - name: gaming
+    url: https://uae.dubizzle.com/classified/gaming/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Classifieds/gaming"
+
+  - name: baby_items
+    url: https://uae.dubizzle.com/classified/baby-items/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Classifieds/baby_items"
+
+  - name: toys
+    url: https://uae.dubizzle.com/classified/toys/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Classifieds/toys"
+
+  - name: tickets_vouchers
+    url: https://uae.dubizzle.com/classified/tickets-vouchers/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Classifieds/tickets_vouchers"
+
+  - name: collectibles
+    url: https://uae.dubizzle.com/classified/collectibles/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Classifieds/collectibles"
+
+  - name: books
+    url: https://uae.dubizzle.com/classified/books/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Classifieds/books"
+
+  - name: music
+    url: https://uae.dubizzle.com/classified/music/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Classifieds/music"
+
+  - name: free_stuff
+    url: https://uae.dubizzle.com/classified/free-stuff/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Classifieds/free_stuff"
+
+  - name: lostfound
+    url: https://uae.dubizzle.com/classified/lostfound/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Classifieds/lostfound"
+
+  - name: dvds_movies
+    url: https://uae.dubizzle.com/classified/dvds-movies/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Classifieds/dvds_movies"
+
+  - name: furniture_home_garden
+    url: https://uae.dubizzle.com/classified/furniture-home-garden/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Classifieds/furniture_home_garden"
+
+  - name: mobile_phones_pdas
+    url: https://uae.dubizzle.com/classified/mobile-phones-pdas/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Classifieds/mobile_phones_pdas"
+
+  - name: auto_services
+    url: https://uae.dubizzle.com/community/auto-services/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Community/auto_services"
+
+  - name: consultancy_services
+    url: https://uae.dubizzle.com/community/consultancy-services/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Community/consultancy_services"
+
+  - name: domestic
+    url: https://uae.dubizzle.com/community/domestic/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Community/domestic"
+
+  - name: event_entertainment
+    url: https://uae.dubizzle.com/community/event-entertainment/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Community/event_entertainment"
+
+  - name: freelancers
+    url: https://uae.dubizzle.com/community/freelancers/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Community/freelancers"
+
+  - name: health_wellbeing_services
+    url: https://uae.dubizzle.com/community/health-wellbeing-services/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Community/health_wellbeing_services"
+
+  - name: home_maintenance
+    url: https://uae.dubizzle.com/community/home-maintenance/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Community/home_maintenance"
+
+  - name: movers_removals
+    url: https://uae.dubizzle.com/community/movers-removals/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Community/movers_removals"
+
+  - name: other_services
+    url: https://uae.dubizzle.com/community/other-services/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Community/other_services"
+
+  - name: restoration_repairs
+    url: https://uae.dubizzle.com/community/restoration-repairs/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Community/restoration_repairs"
+
+  - name: tutors_classes
+    url: https://uae.dubizzle.com/community/tutors-classes/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Community/tutors_classes"
+
+  - name: web_computer_services
+    url: https://uae.dubizzle.com/community/web-computer-services/
+    batch: "DUAE"
+    workflow_file: Classifieds_Community.yml
+    r2_path: "{r2_bucket}/DUAE/Community/web_computer_services"
+
+  - name: Jobs
+    url: https://uae.dubizzle.com/jobs/search/
+    batch: "DUAE"
+    workflow_file: 
+    r2_path: "{r2_bucket}/DUAE/Jobs"
+
+  - name: Jobs_Wanted
+    url: https://uae.dubizzle.com/jobs-wanted/search/
+    batch: "DUAE"
+    workflow_file: 
+    r2_path: "{r2_bucket}/DUAE/Jobs_Wanted"
+  
+# ------------------------------------------------------------
+# PIPELINE CHAIN (auto-detected from workflow triggers)
+# Batch Motors → Property Rent → Property Sale → Jobs → Classifieds & Community   (daily at 00:00 UTC)
+# ------------------------------------------------------------
+pipeline_chain:
+  - batch: "Motors"
+    trigger: "cron: '0 0 * * *'"
+    triggers_next: "Property Rent"
+  - batch: "Property Rent"
+    trigger: "on_completion: Motors"
+    triggers_next: "Property Sale"
+  - batch: "Property Sale"
+    trigger: "on_completion: Property Rent"
+    triggers_next: "Jobs"
+  - batch: "Jobs"
+    trigger: "on_completion: Property Sale"
+    triggers_next: "Classifieds_Community"
+  - batch: "Classifieds_Community"
+    trigger: "workflow_dispatch (triggered by Jobs)"
+    triggers_next: null
+
+# ============================================================
+# EXCEL SCHEMA — Per-scraper .xlsx output validation
+# One entry per scraper; each describes the sheets, required
+# column headers, expected row range, and min file size.
+# ============================================================
+
+# ── REUSABLE COLUMN ANCHORS ─────────────────────────────────
+
+_col_boats_and_auto_accessories_parts_listing: &col_boats_and_auto_accessories_parts_listing
+  - absolute_url
+  - added
+  - age
+  - available_quantity
+  - business
+  - can_chat
+  - category_id
+  - category_v2
+  - condition
+  - content_type
+  - created_at
+  - details
+  - details_v2
+  - discount_percentage
+  - has_any_verification
+  - has_phone_number
+  - has_photos
+  - has_sms_number
+  - has_variants
+  - has_whatsapp_number
+  - highlighted_ad
+  - id
+  - images_r2_paths
+  - is_ecommerce_listing
+  - is_premium
+  - is_spotlight_ad
+  - is_super_ad
+  - is_verified_business
+  - is_verified_user
+  - language
+  - listing_group_id
+  - location_list
+  - lookup_attributes
+  - max_quantity
+  - multi_site
+  - name
+  - neighbourhood
+  - objectID
+  - photo_mains
+  - photos_approved
+  - photos_count
+  - places
+  - pre_discount_price
+  - price
+  - price_type
+  - seller_account_type
+  - seo_links
+  - site
+  - stock_level
+  - tags
+  - uri
+  - usage
+  - user
+  - user_id
+  - uuid
+  - _distinctSeqID
+  - _geoloc 
+  - kilometers
+  - seller_type
+  - year
+
+
+_col_sale_cars_listing: &col_sale_cars_listing
+  - absolute_url
+  - added
+  - age
+  - available_quantity
+  - business
+  - can_chat
+  - category_id
+  - category_v2
+  - condition
+  - content_type
+  - created_at
+  - details
+  - details_v2
+  - discount_percentage
+  - has_any_verification
+  - has_phone_number
+  - has_photos
+  - has_sms_number
+  - has_variants
+  - has_whatsapp_number
+  - highlighted_ad
+  - id
+  - images_r2_paths
+  - is_ecommerce_listing
+  - is_premium
+  - is_spotlight_ad
+  - is_super_ad
+  - is_verified_business
+  - is_verified_user
+  - language
+  - listing_group_id
+  - location_list
+  - lookup_attributes
+  - max_quantity
+  - multi_site
+  - name
+  - neighbourhood
+  - objectID
+  - photo_mains
+  - photos_approved
+  - photos_count
+  - places
+  - pre_discount_price
+  - price
+  - price_type
+  - seller_account_type
+  - seo_links
+  - site
+  - stock_level
+  - tags
+  - uri
+  - usage
+  - user
+  - user_id
+  - uuid
+  - _distinctSeqID
+  - agent_logo
+  - auto_agent_id
+  - car_condition
+  - cotd_on
+  - has_video_url
+  - has_view360
+  - has_vin
+  - inventory_type
+  - is_coming_soon
+  - is_cotd_booked
+  - is_cotw_booked
+  - is_export_car
+  - is_featured_agent
+  - is_inspected
+  - is_reserved
+  - kilometers
+  - motors_trim
+  - motors_variant
+  - seller_type
+  - video_url
+  - year
+
+_col_rental_cars_listing: &col_renal_cars_listing
+  - absolute_url
+  - added
+  - age
+  - available_quantity
+  - business
+  - can_chat
+  - category_id
+  - category_v2
+  - condition
+  - content_type
+  - created_at
+  - details
+  - details_v2
+  - discount_percentage
+  - has_any_verification
+  - has_phone_number
+  - has_photos
+  - has_sms_number
+  - has_variants
+  - has_whatsapp_number
+  - highlighted_ad
+  - id
+  - images_r2_paths
+  - is_ecommerce_listing
+  - is_premium
+  - is_spotlight_ad
+  - is_super_ad
+  - is_verified_business
+  - is_verified_user
+  - language
+  - listing_group_id
+  - location_list
+  - lookup_attributes
+  - max_quantity
+  - multi_site
+  - name
+  - neighbourhood
+  - objectID
+  - photo_mains
+  - photos_approved
+  - photos_count
+  - places
+  - pre_discount_price
+  - price
+  - price_type
+  - seller_account_type
+  - seo_links
+  - site
+  - stock_level
+  - tags
+  - uri
+  - usage
+  - user
+  - user_id
+  - uuid
+  - agent_logo
+  - auto_agent_id
+  - body_type
+  - daily_rental_price
+  - has_view360
+  - internal_links_fields
+  - kilometers
+  - monthly_rental_price
+  - motors_trim
+  - motors_variant
+  - rental_options
+  - rental_type
+  - seller_type
+  - weekly_rental_price
+  - year
+
+_col_number_plates_listing: &col_number_plates_listing
+  - absolute_url
+  - added
+  - age
+  - available_quantity
+  - business
+  - can_chat
+  - category_id
+  - category_v2
+  - condition
+  - content_type
+  - created_at
+  - details
+  - details_v2
+  - discount_percentage
+  - has_any_verification
+  - has_phone_number
+  - has_photos
+  - has_sms_number
+  - has_variants
+  - has_whatsapp_number
+  - highlighted_ad
+  - id
+  - images_r2_paths
+  - is_ecommerce_listing
+  - is_premium
+  - is_spotlight_ad
+  - is_super_ad
+  - is_verified_business
+  - is_verified_user
+  - language
+  - listing_group_id
+  - location_list
+  - lookup_attributes
+  - max_quantity
+  - multi_site
+  - name
+  - neighbourhood
+  - objectID
+  - photo_mains
+  - photos_approved
+  - photos_count
+  - places
+  - pre_discount_price
+  - price
+  - price_type
+  - seller_account_type
+  - seo_links
+  - site
+  - stock_level
+  - tags
+  - uri
+  - usage
+  - user
+  - user_id
+  - uuid
+  - _distinctSeqID
+  - plate_code
+  - plate_number_length
+
+_col_motorcycles_listing: &col_motorcycles_listing
+  - absolute_url
+  - added
+  - age
+  - available_quantity
+  - business
+  - can_chat
+  - category_id
+  - category_v2
+  - condition
+  - content_type
+  - created_at
+  - details
+  - details_v2
+  - discount_percentage
+  - has_any_verification
+  - has_phone_number
+  - has_photos
+  - has_sms_number
+  - has_variants
+  - has_whatsapp_number
+  - highlighted_ad
+  - id
+  - images_r2_paths
+  - is_ecommerce_listing
+  - is_premium
+  - is_spotlight_ad
+  - is_super_ad
+  - is_verified_business
+  - is_verified_user
+  - language
+  - listing_group_id
+  - location_list
+  - lookup_attributes
+  - max_quantity
+  - multi_site
+  - name
+  - neighbourhood
+  - objectID
+  - photo_mains
+  - photos_approved
+  - photos_count
+  - places
+  - pre_discount_price
+  - price
+  - price_type
+  - seller_account_type
+  - seo_links
+  - site
+  - stock_level
+  - tags
+  - uri
+  - usage
+  - user
+  - user_id
+  - uuid
+  - _distinctSeqID
+  - _geoloc
+  - final_drive_system
+  - kilometers
+  - seller_type
+  - wheels
+  - year
+ 
+_col_heavy_vehicles_listing: &col_heavy_vehicles_listing
+  - absolute_url
+  - added
+  - age
+  - available_quantity
+  - business
+  - can_chat
+  - category_id
+  - category_v2
+  - condition
+  - content_type
+  - created_at
+  - details
+  - details_v2
+  - discount_percentage
+  - has_any_verification
+  - has_phone_number
+  - has_photos
+  - has_sms_number
+  - has_variants
+  - has_whatsapp_number
+  - highlighted_ad
+  - id
+  - images_r2_paths
+  - is_ecommerce_listing
+  - is_premium
+  - is_spotlight_ad
+  - is_super_ad
+  - is_verified_business
+  - is_verified_user
+  - language
+  - listing_group_id
+  - location_list
+  - lookup_attributes
+  - max_quantity
+  - multi_site
+  - name
+  - neighbourhood
+  - objectID
+  - photo_mains
+  - photos_approved
+  - photos_count
+  - places
+  - pre_discount_price
+  - price
+  - price_type
+  - seller_account_type
+  - seo_links
+  - site
+  - stock_level
+  - tags
+  - uri
+  - usage
+  - user
+  - user_id
+  - uuid
+  - _distinctSeqID
+  - agent_logo
+  - auto_agent_id
+  - cotd_on
+  - has_vin
+  - is_coming_soon
+  - is_cotd_booked
+  - is_cotw_booked
+  - is_reserved
+  - kilometers
+  - seller_type
+  - year
+
+_col_classifieds_community_listing: &col_classifieds_community_listing
+  - _geoloc
+  - absolute_url
+  - added
+  - age
+  - business
+  - can_chat
+  - category_id
+  - category_v2
+  - condition
+  - created_at
+  - details
+  - details_v2
+  - discount_percentage
+  - has_any_verification
+  - has_phone_number
+  - has_photos
+  - has_variants
+  - has_video
+  - has_whatsapp_number
+  - highlighted_ad
+  - id
+  - images_r2_paths
+  - is_ecommerce_listing
+  - is_premium
+  - is_super_ad
+  - is_trusted_seller
+  - is_verified_business
+  - is_verified_user
+  - language
+  - last_updated_at
+  - location_list
+  - location_path
+  - lookup_attributes
+  - max_quantity
+  - multi_site
+  - name
+  - neighbourhood
+  - objectID
+  - photo_mains
+  - photos_count
+  - places
+  - pre_discount_price
+  - price
+  - price_type
+  - promoted
+  - seller_account_type
+  - seo_links
+  - show_trusted_seller_logo
+  - site
+  - stock_level
+  - tag_slugs_v2
+  - tags
+  - trusted_seller_id
+  - trusted_seller_logo
+  - uri
+  - usage
+  - user_id
+  - uuid
+  - vas
+  
+_col_jobs_wanted_listing: &col_jobs_wanted_listing
+  - photos
+  - age
+  - photo
+  - has_any_verification
+  - has_phone_number
+  - pre_discount_price
+  - uuid
+  - promoted
+  - max_quantity
+  - _geoloc
+  - is_super_ad
+  - details
+  - is_ecommerce_listing
+  - is_scraped
+  - jobs_logo
+  - id
+  - score
+  - details_v2
+  - photo_thumbnails
+  - listing_group_id
+  - multi_site
+  - condition
+  - summary
+  - available_quantity
+  - required_work_experience
+  - last_updated_at
+  - discount_percentage
+  - added
+  - site
+  - is_spotlight_ad
+  - language
+  - created_at
+  - required_education_level
+  - location_path
+  - vas
+  - absolute_url
+  - name
+  - photos_approved
+  - has_whatsapp_number
+  - has_variants
+  - skill_level
+  - is_verified_user
+  - category_v2
+  - photos_count
+  - location_list
+  - usage
+  - seo_links
+  - has_photos
+  - required_commitment
+  - neighbourhood
+  - salary
+  - content_type
+  - tags
+  - uri
+  - places
+  - highlighted_ad
+  - user
+  - user_id
+  - is_premium
+  - price_type
+  - source_url
+  - can_chat
+  - is_verified_business
+  - tag_slugs_v2
+  - stock_level
+  - seller_account_type
+  - business
+  - category_id
+  - price
+  - photo_mains
+  - objectID
+
+_col_jobs_listing: &col_jobs_listing
+  - seo_links
+  - has_any_verification
+  - tags
+  - site
+  - location_list
+  - has_whatsapp_number
+  - age
+  - uri
+  - is_premium
+  - price_type
+  - is_verified_user
+  - price
+  - last_updated_at
+  - score
+  - content_type
+  - photo_thumbnails
+  - has_photos
+  - business
+  - stock_level
+  - absolute_url
+  - photos
+  - tag_slugs_v2
+  - summary
+  - added
+  - listing_group_id
+  - neighbourhood
+  - has_variants
+  - is_ecommerce_listing
+  - language
+  - can_chat
+  - user_id
+  - vas
+  - details_v2
+  - places
+  - condition
+  - multi_site
+  - location_path
+  - is_super_ad
+  - promoted
+  - name
+  - _geoloc
+  - is_verified_business
+  - user
+  - discount_percentage
+  - max_quantity
+  - uuid
+  - photo
+  - photos_approved
+  - category_v2
+  - description
+  - photo_mains
+  - seller_account_type
+  - cv_search_url
+  - id
+  - pre_discount_price
+  - is_spotlight_ad
+  - usage
+  - created_at
+  - available_quantity
+  - details
+  - photos_count
+  - category_id
+  - has_phone_number
+  - highlighted_ad
+  - objectID
+
+# ── PER-SCRAPER SCHEMAS ──────────────────────────────────────
+excel_schema:
+
+  # ── BATCH Motors ─────────────────────────────────────────────────
+
+  - scraper: used_cars
+    excel_file_pattern: "{brand_name}.xlsx"
+    sheets:
+      - name: "{car_type}"
+        required_columns: *col_sale_cars_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: new_cars
+    excel_file_pattern: "{brand_name}.xlsx"
+    sheets:
+      - name: "{car_type}"
+        required_columns: *col_sale_cars_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: export_cars
+    excel_file_pattern: "{brand_name}.xlsx"
+    sheets:
+      - name: "{car_type}"
+        required_columns: *col_sale_cars_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: rental_cars
+    excel_file_pattern: "{brand_name}.xlsx"
+    sheets:
+      - name: "{car_type}"
+        required_columns: *col_renal_cars_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: motorcycles
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_motorcycles_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: auto_accessories_parts
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_boats_and_auto_accessories_parts_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: heavy_vehicles
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_heavy_vehicles_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: boats
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_boats_and_auto_accessories_parts_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: number_plates
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_number_plates_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  # ── BATCH Classifieds_Community ─────────────────────────────────────────────────
+
+  - scraper: electronics
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: computers_networking
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: business_industrial
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: home_appliances
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: sports_equipment
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: clothing_accessories
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: cameras_imaging
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: jewelry_watches
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+  
+  - scraper: pets
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: musical_instruments
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: gaming
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: baby_items
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: toys
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: tickets_vouchers
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: collectibles
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: books
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: music
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: free_stuff
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: lostfound
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: dvds_movies
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: furniture_home_garden
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: mobile_phones_pdas
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: auto_services
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: consultancy_services
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: domestic
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: event_entertainment
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: freelancers
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: health_wellbeing_services
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: home_maintenance
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: movers_removals
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: other_services
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: restoration_repairs
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: tutors_classes
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: web_computer_services
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_classifieds_community_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+  
+  # ── BATCH Jobs ─────────────────────────────────────────────────
+
+  - scraper: Jobs
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_jobs_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+  - scraper: Jobs_Wanted
+    excel_file_pattern: "{subcategory_slug}.xlsx"
+    sheets:
+      - name: "{child_category or Main}"
+        required_columns: *col_jobs_wanted_listing
+        row_count_range: [1, 1]
+    min_file_size_kb: 5
+
+# ============================================================
+# ALERT THRESHS — schema validation + historical trend alarms
+# Trend multipliers calibrated against monitor_stats.yml
+# (observed 2026-06-07 → 2026-06-13, 7 days, 23 scrapers)
+# ============================================================
+alert_thresholds:
+  enabled: true
+
+  # Fire webhook when ANY scraper fails schema / trend / missing-files check
+  alert_on_any_failure: true
+
+  # Historical trend checks (requires monitor_stats.yml in R2)
+  trend:
+    min_observed_days: 3
+    min_row_pct_of_hist_min: 30       # alert if rows < 30% of historical min per sheet
+    max_row_pct_of_hist_max: 300      # alert if rows > 300% of historical max per sheet
+    min_file_size_pct_of_hist_min: 50 # alert if file < 50% of historical min per scraper
+
+  # Run-level gate — skip webhook if failure rate is below this (0 = always alert)
+  max_scraper_fail_rate_pct: 0
+
+  # Per-scraper observed file-size floors (KB) from real stats × 50%, floored at schema min
+  # Used as a fast check even before trend history exists
+  observed_min_file_size_kb:
+    used_cars: 5
+    new_cars: 5
+    export_cars: 5
+    rental_cars: 5
+    motorcycles: 5
+    auto_accessories_parts: 5
+    heavy_vehicles: 5
+    boats: 5
+    number_plates: 5
+    electronics: 5
+    computers_networking: 5
+    business_industrial: 5
+    home_appliances: 5
+    sports_equipment: 5
+    clothing_accessories: 5
+    cameras_imaging: 5
+    jewelry_watches: 5
+    pets: 5
+    musical_instruments: 5
+    gaming: 5
+    baby_items: 5
+    toys: 5
+    tickets_vouchers: 5
+    collectibles: 5
+    books: 5
+    music: 5
+    free_stuff: 5
+    lostfound: 5 
+    dvds_movies: 5
+    furniture_home_garden: 5
+    mobile_phones_pdas: 5
+    auto_services: 5
+    consultancy_services: 5
+    domestic: 5
+    event_entertainment: 5
+    freelancers: 5
+    health_wellbeing_services: 5
+    home_maintenance: 5
+    movers_removals: 5
+    other_services: 5
+    restoration_repairs: 5
+    tutors_classes: 5
+    web_computer_services: 5
+    Jobs: 5
+    Jobs_Wanted: 5
+
+  channels:
+    webhook:
+      enabled: true
+      # URL from env MONITOR_ALERT_WEBHOOK_URL (GitHub secret)
+      # Import monitor/n8n-email-alert-workflow.json for email via n8n
