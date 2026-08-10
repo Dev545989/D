@@ -502,7 +502,7 @@ def build_group_summary(
             "slug": sanitize_name(cat0),
         },
         "category_path": category_path,
-        "workflow_name": "Rent Property",
+        "workflow_name": "Rent Property and Jobs",
         "total_subcategories": len(subcategories),
         "total_listings": len(group_df),
         "subcategories": subcategories,

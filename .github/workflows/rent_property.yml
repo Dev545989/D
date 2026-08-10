@@ -1,4 +1,4 @@
-name: Rent Property
+name: Rent Property and Jobs
 
 on:
   schedule:
@@ -67,6 +67,16 @@ jobs:
                 "rent_short_term_daily": {
                     "index": "property-for-rent-short-term-daily.com",
                     "filter": '("category_v2.slug_paths":"property-for-rent/short-term-daily")',
+                    "hits": []
+                },
+                "jobs": {
+                    "index": "by_added_desc_jobs.com",
+                    "filter": '("category_v2.slug_paths":"jobs")',
+                    "hits": []
+                },
+                "jobs_wanted": {
+                    "index": "by_added_desc_jobs-wanted.com",
+                    "filter": '("category_v2.slug_paths":"jobs-wanted")',
                     "hits": []
                 }             
                 
@@ -176,6 +186,8 @@ jobs:
               "rent_holiday_homes": {"index": "property-for-rent-holiday-homes.com", "filter": '("categories.slug_paths":"property-for-rent/holiday-homes")'},
               "rent_short_term_monthly": {"index": "property-for-rent-short-term.com", "filter": '("categories_v2.slug_paths":"property-for-rent/short-term")', "hits": []},
               "rent_short_term_daily": {"index": "property-for-rent-short-term-daily.com", "filter": '("category_v2.slug_paths":"property-for-rent/short-term-daily")'},
+              "jobs": {"index": "by_added_desc_jobs.com", "filter": '("category_v2.slug_paths":"jobs")', "hits": []},
+              "jobs_wanted": {"index": "by_added_desc_jobs-wanted.com", "filter": '("category_v2.slug_paths":"jobs-wanted")', "hits": []}
           }
 
           ROWS_PER_BATCH = 1000
@@ -330,6 +342,8 @@ jobs:
           - rent_holiday_homes
           - rent_short_term_daily
           - rent_short_term_monthly
+          - jobs
+          - jobs_wanted
 
     steps:
       - name: Checkout repo
@@ -648,7 +662,7 @@ jobs:
                   "saved_to_R2_date": agg["saved_to_R2_date"],
                   "category": agg["category"],
                   "category_path": cp,
-                  "workflow_name": "Rent Property",
+                  "workflow_name": "Rent Property and Jobs",
                   "total_subcategories": len(agg["subcats"]),
                   "total_listings": agg["total_listings"],
                   "subcategories": list(agg["subcats"].values()),
