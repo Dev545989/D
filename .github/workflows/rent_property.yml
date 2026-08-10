@@ -68,7 +68,7 @@ jobs:
                     "index": "property-for-rent-short-term-daily.com",
                     "filter": '("category_v2.slug_paths":"property-for-rent/short-term-daily")',
                     "hits": []
-                }              
+                }             
                 
           }
 
@@ -89,7 +89,7 @@ jobs:
                   r = requests.post(URL, params=PARAMS, json=payload, timeout=30)
                   data = r.json()
                   nb_pages = data["results"][0]["nbPages"]
-                  nb_pages = 20 
+                  nb_pages = 20
                   print(f"  {category_name}: {nb_pages} pages")
               except Exception as e:
                   print(f"  Failed: {e}")
@@ -176,10 +176,9 @@ jobs:
               "rent_holiday_homes": {"index": "property-for-rent-holiday-homes.com", "filter": '("categories.slug_paths":"property-for-rent/holiday-homes")'},
               "rent_short_term_monthly": {"index": "property-for-rent-short-term.com", "filter": '("categories_v2.slug_paths":"property-for-rent/short-term")', "hits": []},
               "rent_short_term_daily": {"index": "property-for-rent-short-term-daily.com", "filter": '("category_v2.slug_paths":"property-for-rent/short-term-daily")'},
-          
           }
 
-          ROWS_PER_BATCH = 2000
+          ROWS_PER_BATCH = 1000
           HITS_PER_PAGE = 35
           PAGES_PER_BATCH = math.ceil(ROWS_PER_BATCH / HITS_PER_PAGE)
 
@@ -245,7 +244,7 @@ jobs:
 
       - name: Install Playwright browsers
         run: playwright install --with-deps chromium
-
+      
       - name: Download raw data for ${{ matrix.category }}
         uses: actions/download-artifact@v4
         with:
@@ -287,7 +286,7 @@ jobs:
               exit(0)
 
           output_base = "output"
-          result = process_category(category, batch_jsonl, output_base, upload_images=False, enrich_contact_details=True)
+          result = process_category(category, batch_jsonl, output_base, upload_images=False, enrich_description=True)
           print(f"Batch processed: {result['total']} rows | {len(result['excel_files'])} excel files")
 
           if not result["excel_files"]:
@@ -376,10 +375,28 @@ jobs:
           import glob
           import os
           import json
+          import shutil
           import boto3
           import pandas as pd
           from datetime import datetime
           from collections import defaultdict
+
+          def format_failed_summary(failed_items: list, max_len: int = 400) -> str | None:
+              if not failed_items:
+                  return None
+              parts = []
+              for item in failed_items[:12]:
+                  name = item.get("name", "?")
+                  count = item.get("errors", 0)
+                  detail = item.get("detail", "")
+                  bit = f"{name}: {count} error(s)"
+                  if detail:
+                      bit += f" ({detail})"
+                  parts.append(bit)
+              text = "; ".join(parts)
+              if len(failed_items) > 12:
+                  text += f"; +{len(failed_items) - 12} more"
+              return text[:max_len]
 
           category = "${{ matrix.category }}"
           dt = datetime.now()
@@ -398,6 +415,35 @@ jobs:
           if not batch_dirs:
             print(f"No batches found for {category}, skipping upload.")
             exit(0)
+
+          # Read category_path from first summary.json found
+          category_path = None
+          for batch_dir in batch_dirs:
+              for summary_file in glob.glob(os.path.join(batch_dir, "**", "summary.json"), recursive=True):
+                  try:
+                      with open(summary_file, 'r', encoding='utf-8') as f:
+                          s = json.load(f)
+                      category_path = s.get("category_path")
+                      if category_path:
+                          break
+                  except Exception:
+                      pass
+              if category_path:
+                  break
+
+          # Fallback: build from category name if no summary found
+          if not category_path:
+              if category == "off_plan":
+                  category_path = "property/property-for-sale/off-plan"
+              elif category.startswith("sale_"):
+                  category_path = f"property/property-for-sale/{category.replace('sale_', '')}"
+              elif category.startswith("rent_"):
+                  category_path = f"property/property-for-rent/{category.replace('rent_', '')}"
+              else:
+                  category_path = category.replace("_", "/")
+              print(f"Warning: category_path not found in summaries, using fallback: {category_path}")
+
+          print(f"Using category_path: {category_path}")
 
           excel_groups = defaultdict(list)
 
@@ -452,12 +498,15 @@ jobs:
               with open(local_json_path, "w", encoding="utf-8") as f:
                   json.dump(all_records, f, ensure_ascii=False, indent=2, default=str)
 
-              r2_key_excel = f"DUAE/{date_prefix}/{relative_path.replace(os.sep, '/')}"
+              # Upload to new structured path: DUAE/date/category_path/file_type/filename
+              filename = os.path.basename(local_final_path)
+              r2_key_excel = f"DUAE/{date_prefix}/{category_path}/excel/{filename}"
               client.upload_file(local_final_path, bucket, r2_key_excel,
                   ExtraArgs={'ContentType': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})
               print(f"Uploaded Excel: {r2_key_excel}")
 
-              r2_key_json = f"DUAE/{date_prefix}/{json_relative.replace(os.sep, '/')}"
+              json_filename = os.path.basename(local_json_path)
+              r2_key_json = f"DUAE/{date_prefix}/{category_path}/json/{json_filename}"
               client.upload_file(local_json_path, bucket, r2_key_json,
                   ExtraArgs={'ContentType': 'application/json; charset=utf-8'})
               print(f"Uploaded JSON: {r2_key_json}")
@@ -529,24 +578,6 @@ jobs:
                   "detail": fp["error"]
               })
 
-          # Format failed_items_summary
-          def format_failed_summary(failed_items: list, max_len: int = 400) -> str | None:
-              if not failed_items:
-                  return None
-              parts = []
-              for item in failed_items[:12]:
-                  name = item.get("name", "?")
-                  count = item.get("errors", 0)
-                  detail = item.get("detail", "")
-                  bit = f"{name}: {count} error(s)"
-                  if detail:
-                      bit += f" ({detail})"
-                  parts.append(bit)
-              text = "; ".join(parts)
-              if len(failed_items) > 12:
-                  text += f"; +{len(failed_items) - 12} more"
-              return text[:max_len]
-
           failed_items_summary = format_failed_summary(failed_items)
 
           # Calculate error_rate_pct
@@ -575,27 +606,30 @@ jobs:
               "failed_pages": all_failed_pages,
           }
 
-          # UPLOAD summary.json (contains request_metrics + failed_items inside)
-          summary_hierarchy_groups = set()
-          for relative_path in excel_groups.keys():
-              parts = relative_path.replace(os.sep, '/').split('/')
-              hierarchy = "/".join(parts[:-2])
-              summary_hierarchy_groups.add(hierarchy)
-
+          # SAVE summary placeholders for finalization (duration added later by finalize_summaries.py)
+          os.makedirs("summaries", exist_ok=True)
+          
+          # Aggregate batch summaries
           summary_by_group = {}
           for batch_dir in batch_dirs:
               for summary_file in glob.glob(os.path.join(batch_dir, "**", "summary.json"), recursive=True):
-                  rel = os.path.relpath(summary_file, batch_dir)
-                  hierarchy = os.path.dirname(os.path.dirname(rel)).replace(os.sep, '/')
-                  with open(summary_file, 'r', encoding='utf-8') as f:
-                      s = json.load(f)
-                  agg = summary_by_group.setdefault(hierarchy, {
-                      "scraped_at": s["scraped_at"],
-                      "data_scraped_date": s["data_scraped_date"],
-                      "saved_to_R2_date": s["saved_to_R2_date"],
-                      "category": s.get("category", ""),
+                  try:
+                      with open(summary_file, 'r', encoding='utf-8') as f:
+                          s = json.load(f)
+                  except Exception:
+                      continue
+                  
+                  cp = s.get("category_path", category_path)
+                  agg = summary_by_group.setdefault(cp, {
+                      "scraped_at": s.get("scraped_at"),
+                      "data_scraped_date": s.get("data_scraped_date"),
+                      "saved_to_R2_date": s.get("saved_to_R2_date"),
+                      "category": s.get("category", {}),
+                      "category_path": cp,
+                      "workflow_name": "Sale Property",
                       "total_listings": 0,
                       "subcats": {},
+                      "failed_items": [],
                   })
                   agg["total_listings"] += s.get("total_listings", 0)
                   for sc in s.get("subcategories", []):
@@ -604,25 +638,91 @@ jobs:
                           agg["subcats"][key]["listings_count"] += sc["listings_count"]
                       else:
                           agg["subcats"][key] = dict(sc)
-
-          for hierarchy, agg in summary_by_group.items():
+                  agg["failed_items"].extend(s.get("failed_items", []))
+          
+          # Save aggregated summaries for finalization
+          for cp, agg in summary_by_group.items():
               summary_data = {
                   "scraped_at": agg["scraped_at"],
                   "data_scraped_date": agg["data_scraped_date"],
                   "saved_to_R2_date": agg["saved_to_R2_date"],
                   "category": agg["category"],
+                  "category_path": cp,
                   "workflow_name": "Rent Property",
                   "total_subcategories": len(agg["subcats"]),
                   "total_listings": agg["total_listings"],
                   "subcategories": list(agg["subcats"].values()),
                   "request_metrics": request_metrics,
-                  "failed_items": failed_items,
+                  "failed_items": agg["failed_items"],
                   "failed_items_summary": failed_items_summary,
               }
-              r2_key = f"DUAE/{date_prefix}/{hierarchy}/summary/summary.json"
-              client.put_object(Bucket=bucket, Key=r2_key, Body=json.dumps(summary_data, ensure_ascii=False, indent=2).encode('utf-8'),
-                               ContentType='application/json; charset=utf-8')
-              print(f"Uploaded summary: {r2_key}")
+              
+              safe_cp = cp.replace("/", "_")
+              summary_path = f"summaries/summary_placeholder_{safe_cp}.json"
+              with open(summary_path, "w", encoding="utf-8") as f:
+                  json.dump(summary_data, f, ensure_ascii=False, indent=2)
+              print(f"Saved summary placeholder: {summary_path}")
+          
+          # Copy request stats for finalization
+          for stats_file in glob.glob("batches/**/request_stats_*.json", recursive=True):
+              shutil.copy(stats_file, "summaries/")
+              print(f"Copied request stats: {os.path.basename(stats_file)}")
+          
+          print(f"\nDONE: {uploaded_count} files uploaded for {category} | Total rows: {total_rows_all}")
 
           print(f"\nDONE: {uploaded_count} files uploaded for {category} | Total rows: {total_rows_all}")
           EOF
+
+      - name: Upload summary placeholders for finalization
+        uses: actions/upload-artifact@v4
+        with:
+          name: summaries-${{ matrix.category }}
+          path: summaries/
+          if-no-files-found: ignore
+
+
+  finalize-summaries:
+    runs-on: ubuntu-latest
+    needs: final_merge
+    if: ${{ always() }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install boto3 python-dotenv
+
+      - name: Get workflow duration
+        id: workflow_duration
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          STARTED_AT=$(gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }} --jq .run_started_at)
+          START_TIMESTAMP=$(date -d "$STARTED_AT" +%s)
+          NOW_TIMESTAMP=$(date -u +%s)
+          DURATION_SEC=$((NOW_TIMESTAMP - START_TIMESTAMP))
+          echo "duration_sec=$DURATION_SEC" >> "$GITHUB_OUTPUT"
+          echo "Workflow started at: $STARTED_AT"
+          echo "Workflow duration: ${DURATION_SEC}s"
+
+      - name: Download all summary placeholders
+        uses: actions/download-artifact@v4
+        with:
+          pattern: summaries-*
+          merge-multiple: true
+          path: summaries/
+
+      - name: Finalize and upload summaries to R2
+        env:
+          CF_R2_ACCESS_KEY_ID: ${{ secrets.CF_R2_ACCESS_KEY_ID }}
+          CF_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_R2_SECRET_ACCESS_KEY }}
+          CF_R2_ENDPOINT_URL: ${{ secrets.CF_R2_ENDPOINT_URL }}
+          CF_R2_BUCKET_NAME: ${{ secrets.CF_R2_BUCKET_NAME }}
+          WORKFLOW_DURATION: ${{ steps.workflow_duration.outputs.duration_sec }}
+        run: |
+          python finalize_summaries.py --summaries-dir summaries/ --workflow "Sale Property" --aggregate

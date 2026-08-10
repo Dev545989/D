@@ -35,7 +35,7 @@ R2_CLIENT_INSTANCE = get_r2_client()
 
 
 def build_r2_key(folder_name: str, category: str, file_type: str, filename: str,
-                  dt: datetime = None, category_display: str = None) -> str:
+                  dt: datetime = None, category_display: str = None, category_path: str = None) -> str:
     if dt is None:
         dt = datetime.now()
 
@@ -43,8 +43,12 @@ def build_r2_key(folder_name: str, category: str, file_type: str, filename: str,
     month = f"month={dt.strftime('%m')}"
     day   = f"day={dt.strftime('%d')}"
 
-    cat_path = category_display or category
+    # New structured path: duae/date/category_path/file_type/filename
+    if category_path:
+        return f"{folder_name}/{year}/{month}/{day}/{category_path}/{file_type}/{filename}"
 
+    # Legacy fallback
+    cat_path = category_display or category
     if file_type:
         return f"{folder_name}/{year}/{month}/{day}/{cat_path}/{file_type}/{filename}"
     else:
@@ -54,18 +58,19 @@ def build_r2_key(folder_name: str, category: str, file_type: str, filename: str,
 def upload_buffer(
     buffer: io.BytesIO,
     filename: str,
-    folder_name: str = "qatarsale",
+    folder_name: str = "DUAE",
     category: str = "",
     file_type: str = "images",
     content_type: str = "image/webp",
     dt: datetime = None,
-    category_display: str = None
+    category_display: str = None,
+    category_path: str = None
 ) -> str | None:
     client = R2_CLIENT_INSTANCE if R2_CLIENT_INSTANCE else get_r2_client()
     if not client or not BUCKET_NAME:
         return None
 
-    r2_key = build_r2_key(folder_name, category, file_type, filename, dt, category_display)
+    r2_key = build_r2_key(folder_name, category, file_type, filename, dt, category_display, category_path)
 
     try:
         buffer.seek(0)

@@ -6,6 +6,7 @@ import re
 import io
 import random
 import time
+import glob
 import requests as req
 from PIL import Image
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -31,6 +32,42 @@ COLUMNS_TO_DROP = ["tag_slugs", "category", "category_slug_tree", "category_tree
 
 MAX_IMAGE_DIMENSION = 1280
 WEBP_QUALITY = 65
+
+
+# =============================================================================
+# Dynamic category path from category_v2.slug_paths
+# =============================================================================
+
+def get_category_path(category_v2_value) -> str:
+    """Build R2 folder path from category_v2.slug_paths dynamically.
+
+    Example:
+        slug_paths: ['property-for-sale/residential/apartment', 'property-for-sale/residential', 'property-for-sale']
+        -> deepest: 'property-for-sale/residential/apartment'
+        -> parent:  'property-for-sale/residential'  (remove last sub-type)
+        -> result:  'property/property-for-sale/residential'  (prepend 'property/')
+    """
+    cat = parse_dict_field(category_v2_value)
+    slug_paths = cat.get("slug_paths", [])
+    if not slug_paths:
+        return "unknown"
+
+    # Take the deepest path (first element)
+    deepest = slug_paths[0]
+    parts = deepest.split("/")
+
+    # Remove last segment (sub-type like 'apartment', 'villa') to get parent category
+    if len(parts) > 2:
+        parent = "/".join(parts[:-1])
+    else:
+        parent = deepest
+
+    # If starts with 'property-', prepend 'property/'
+    # e.g. 'property-for-sale/residential' -> 'property/property-for-sale/residential'
+    if parent.startswith("property-"):
+        return f"property/{parent}"
+
+    return parent
 
 
 def parse_dict_field(value):
@@ -221,7 +258,7 @@ def enrich_with_description(
     return df
 
 
-def download_images(images: list, id_prod: str = "", category: str = "", cat0: str = "") -> list:
+def download_images(images: list, id_prod: str = "", category: str = "", cat0: str = "", category_path: str = None) -> list:
     r2_paths = []
     uploaded = 0
     failed = 0
@@ -231,7 +268,6 @@ def download_images(images: list, id_prod: str = "", category: str = "", cat0: s
 
     ext = "webp"
     file_prefix = id_prod or "unknown"
-    category_display = cat0
     today = datetime.now(timezone.utc)
 
     for idx, img_url in enumerate(images, start=1):
@@ -253,7 +289,8 @@ def download_images(images: list, id_prod: str = "", category: str = "", cat0: s
                     file_type="images",
                     content_type="image/webp",
                     dt=today,
-                    category_display=category_display
+                    category_display=cat0,
+                    category_path=category_path
                 )
                 if r2_key:
                     r2_paths.append(r2_key)
@@ -271,13 +308,13 @@ def download_images(images: list, id_prod: str = "", category: str = "", cat0: s
     return r2_paths
 
 
-def process_images_for_group(df: pd.DataFrame, category: str, cat0: str, workers: int = 4) -> pd.DataFrame:
+def process_images_for_group(df: pd.DataFrame, category: str, cat0: str, workers: int = 4, category_path: str = None) -> pd.DataFrame:
     df = df.copy()
     n = len(df)
     results = [None] * n
 
     def worker(pos: int, images: list, id_prod: str) -> tuple:
-        r2_paths = download_images(images, id_prod=id_prod, category=category, cat0=cat0)
+        r2_paths = download_images(images, id_prod=id_prod, category=category, cat0=cat0, category_path=category_path)
         return pos, r2_paths
 
     tasks = []
@@ -348,23 +385,47 @@ def format_failed_summary(failed_items: list, max_len: int = 400) -> str | None:
     return text[:max_len]
 
 
-def read_request_stats(category_name: str, output_base_dir: str) -> dict:
-    """Read request_stats_{category_name}.json if it exists."""
-    stats_file = os.path.join(output_base_dir, f"request_stats_{category_name}.json")
-    if os.path.exists(stats_file):
-        with open(stats_file, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
+def read_request_stats(output_base_dir: str) -> dict:
+    """Read and aggregate all request_stats_*.json files."""
+    all_stats = []
+    for stats_file in glob.glob(os.path.join(output_base_dir, "request_stats_*.json")):
+        try:
+            with open(stats_file, "r", encoding="utf-8") as f:
+                all_stats.append(json.load(f))
+        except Exception:
+            pass
+
+    if not all_stats:
+        return {}
+
+    total_requests = sum(s.get('total_requests', 0) for s in all_stats)
+    total_duration_min = sum(s.get('total_duration_min', 0) or 0 for s in all_stats)
+
+    return {
+        "total_requests": total_requests,
+        "total_duration_min": round(total_duration_min, 2),
+        "total_req_per_min": round(total_requests / total_duration_min, 2) if total_duration_min > 0 else total_requests,
+    }
 
 
-def read_failed_pages(category_name: str, output_base_dir: str) -> list:
-    """Read failed_pages_{category_name}.json if it exists."""
-    failed_file = os.path.join(output_base_dir, f"failed_pages_{category_name}.json")
-    if os.path.exists(failed_file):
-        with open(failed_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            return data.get("failed_pages", [])
-    return []
+def read_failed_pages(output_base_dir: str) -> list:
+    """Read all failed_pages_*.txt files."""
+    failed_pages = []
+    for failed_file in glob.glob(os.path.join(output_base_dir, "failed_pages_*.txt")):
+        try:
+            with open(failed_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            for line in lines:
+                line = line.strip()
+                if line.startswith("page="):
+                    page_num = line.replace("page=", "")
+                    failed_pages.append({
+                        "page": page_num,
+                        "error": "Failed after retries"
+                    })
+        except Exception:
+            pass
+    return failed_pages
 
 
 def build_group_summary(
@@ -374,6 +435,7 @@ def build_group_summary(
     dt: datetime,
     category_name: str,
     output_base_dir: str,
+    category_path: str,
 ) -> dict:
     """
     Build a DKSA-style summary.json.
@@ -390,7 +452,7 @@ def build_group_summary(
         for name, fdf in file_groups.items()
     ]
 
-    stats_data = read_request_stats(category_name, output_base_dir)
+    stats_data = read_request_stats(output_base_dir)
     request_metrics = {}
     requests_duration_sec = None
 
@@ -402,19 +464,19 @@ def build_group_summary(
         request_metrics = {
             "requests_total": stats_data.get("total_requests", 0),
             "requests_failed": 0,
-            "duration_sec": stats_data.get("total_duration", 0),
+            "duration_sec": stats_data.get("total_duration_min", 0) * 60 if stats_data.get("total_duration_min") else 0,
             "requests_per_min": stats_data.get("total_req_per_min", 0),
             "requests_duration_sec": requests_duration_sec,
         }
 
-    failed_pages = read_failed_pages(category_name, output_base_dir)
+    failed_pages = read_failed_pages(output_base_dir)
     total_failed = len(failed_pages)
     request_metrics["requests_failed"] = total_failed
 
     failed_items = []
     for page in failed_pages:
         failed_items.append({
-            "name": f"{page.get('category', 'unknown')}-page-{page.get('page', '?')}",
+            "name": f"{category_name}-page-{page.get('page', '?')}",
             "errors": 1,
             "detail": page.get("error", "Unknown error")
         })
@@ -432,13 +494,14 @@ def build_group_summary(
 
     return {
         "scraped_at": dt.isoformat(),
-        "data_scraped_date": dt.strftime("%Y-%m-%d"),
+        "data_scraped_date": (dt - timedelta(days=1)).strftime("%Y-%m-%d"),
         "saved_to_R2_date": dt.strftime("%Y-%m-%d"),
         "category": {
             "name_ar": cat0,
             "name_en": cat0,
             "slug": sanitize_name(cat0),
         },
+        "category_path": category_path,
         "workflow_name": "Rent Property",
         "total_subcategories": len(subcategories),
         "total_listings": len(group_df),
@@ -468,7 +531,6 @@ def convert_timestamp_columns(df: pd.DataFrame) -> pd.DataFrame:
                 .dt.tz_convert("Asia/Dubai")
                 .dt.strftime("%Y-%m-%d %H:%M:%S")
             )
-
             print(f"  Converted timestamp column: {col}")
 
     return df
@@ -483,6 +545,11 @@ def _process_category_internal(
 ) -> dict:
     if df.empty:
         return {"excel_files": [], "json_files": []}
+
+    # Build category_path dynamically from category_v2.slug_paths
+    first_cat_v2 = df["category_v2"].iloc[0] if not df.empty and "category_v2" in df.columns else None
+    category_path = get_category_path(first_cat_v2)
+    print(f"  Category path: {category_path}")
 
     df["_names_en"] = df["category_v2"].apply(get_category_names)
 
@@ -520,7 +587,7 @@ def _process_category_internal(
         if should_process_images:
             print(f"  Processing images for {safe_cat0} ({len(group_df)} listings)...")
             group_df = process_images_for_group(
-                group_df, category=category_name, cat0=safe_cat0, workers=image_workers
+                group_df, category=category_name, cat0=safe_cat0, workers=image_workers, category_path=category_path
             )
 
         excel_dir = os.path.join(group_dir, "excel")
@@ -558,6 +625,7 @@ def _process_category_internal(
             dt,
             category_name,
             output_base_dir,
+            category_path,
         )
         summary_file_path = os.path.join(summary_dir, "summary.json")
         with open(summary_file_path, "w", encoding="utf-8") as f:
@@ -573,7 +641,7 @@ def process_category(
     output_base_dir: str,
     upload_images: bool = False,
     image_workers: int = 4,
-    enrich_contact_details: bool = False,
+    enrich_description: bool = True,
 ) -> dict:
     df = load_all_hits(jsonl_files)
     if df.empty:
@@ -581,7 +649,7 @@ def process_category(
 
     df = convert_timestamp_columns(df)
 
-    if enrich_contact_details and "absolute_url" in df.columns:
+    if enrich_description and "absolute_url" in df.columns:
         print(f"  Enriching {len(df)} rows with description_full...")
         df = enrich_with_description(df)
 
