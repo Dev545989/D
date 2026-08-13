@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Finalize summaries: aggregate batch summaries, add workflow duration, and upload to R2.
-Works for both Property and Motors workflows.
+Finalize summaries: aggregate batch summaries (per category_path), add the
+real workflow duration, and upload one summary.json per category to R2.
+Works for Motors, Property, and Classifieds & Community workflows.
 """
 
 import argparse
@@ -22,17 +23,17 @@ def load_summary(filepath: str) -> dict:
 
 def aggregate_summaries(summary_files: list) -> dict:
     """
-    Aggregate multiple batch summaries into one final summary.
-    Used when a category has multiple batch summaries (e.g., Property with many batches).
+    Aggregate multiple batch summaries (same category_path) into one.
+    request_metrics.requests_total / requests_failed are SUMMED across
+    files too -- each batch already carries its own dub_writer-computed
+    stats, and those must not be dropped when combining batches.
     """
     if not summary_files:
         return {}
 
-    # If only one file, return it directly
     if len(summary_files) == 1:
         return load_summary(summary_files[0])
 
-    # Aggregate multiple summaries
     aggregated = {
         "scraped_at": None,
         "data_scraped_date": None,
@@ -51,11 +52,12 @@ def aggregate_summaries(summary_files: list) -> dict:
     subcats = {}
     total_listings = 0
     all_failed_items = []
+    requests_total_sum = 0
+    requests_failed_sum = 0
 
     for filepath in summary_files:
         s = load_summary(filepath)
 
-        # Use first summary for metadata
         if aggregated["scraped_at"] is None:
             aggregated["scraped_at"] = s.get("scraped_at")
             aggregated["data_scraped_date"] = s.get("data_scraped_date")
@@ -75,9 +77,17 @@ def aggregate_summaries(summary_files: list) -> dict:
 
         all_failed_items.extend(s.get("failed_items", []))
 
+        rm = s.get("request_metrics", {}) or {}
+        requests_total_sum += rm.get("requests_total", 0) or 0
+        requests_failed_sum += rm.get("requests_failed", 0) or 0
+
     aggregated["total_listings"] = total_listings
     aggregated["total_subcategories"] = len(subcats)
     aggregated["subcategories"] = list(subcats.values())
+    aggregated["request_metrics"] = {
+        "requests_total": requests_total_sum,
+        "requests_failed": requests_failed_sum,
+    }
 
     # Deduplicate failed items
     seen = set()
@@ -111,51 +121,20 @@ def format_failed_summary(failed_items: list, max_len: int = 400) -> str | None:
     return text[:max_len]
 
 
-def aggregate_request_stats(summaries_dir: str) -> dict:
-    """Read and aggregate all request_stats_*.json files in the directory."""
-    stats_files = glob.glob(os.path.join(summaries_dir, "request_stats_*.json"))
-
-    total_requests = 0
-    total_duration_min = 0.0
-
-    for sf in stats_files:
-        try:
-            with open(sf, 'r', encoding='utf-8') as f:
-                st = json.load(f)
-            total_requests += st.get('total_requests', 0)
-            total_duration_min += st.get('total_duration_min', 0) or 0
-        except Exception:
-            pass
-
-    result = {
-        "requests_total": total_requests,
-        "duration_sec": round(total_duration_min * 60, 2),
-    }
-
-    if total_duration_min > 0:
-        result["requests_per_min"] = round(total_requests / total_duration_min, 2)
-    else:
-        result["requests_per_min"] = total_requests
-
-    return result
-
-
 def finalize_summaries(summaries_dir: str, workflow_name: str = None, aggregate: bool = False):
     """
-    Finalize summaries: add workflow duration and upload to R2.
-
-    Args:
-        summaries_dir: Directory containing summary JSON files
-        workflow_name: Name of the workflow (e.g., "Sale Property", "Motors")
-        aggregate: If True, aggregate multiple summaries per category_path
+    For each category_path found under summaries_dir: aggregate its batch
+    summaries (if more than one), add the real workflow duration, and
+    upload ONE summary.json per category to R2 -- request_metrics and
+    failed_items stay embedded inside that same file, never as separate
+    uploads.
     """
     dt = datetime.now(timezone.utc)
     date_prefix = f"year={dt.year}/month={dt.strftime('%m')}/day={dt.strftime('%d')}"
 
-    # Read workflow duration from environment
     workflow_duration = os.getenv("WORKFLOW_DURATION")
     if not workflow_duration:
-        print("⚠️ WORKFLOW_DURATION not set. Using fallback 0.")
+        print("\u26a0\ufe0f WORKFLOW_DURATION not set. Using fallback 0.")
         workflow_duration = "0"
 
     try:
@@ -163,9 +142,8 @@ def finalize_summaries(summaries_dir: str, workflow_name: str = None, aggregate:
     except ValueError:
         duration_sec = 0.0
 
-    print(f"✅ Workflow duration: {duration_sec}s")
+    print(f"\u2705 Workflow duration: {duration_sec}s")
 
-    # Find all summary files (both summary.json and summary_placeholder_*.json)
     patterns = [
         os.path.join(summaries_dir, "*.json"),
         os.path.join(summaries_dir, "**", "summary.json"),
@@ -174,7 +152,6 @@ def finalize_summaries(summaries_dir: str, workflow_name: str = None, aggregate:
     summary_files = set()
     for pattern in patterns:
         for filepath in glob.glob(pattern, recursive=True):
-            # Skip request stats files
             if not os.path.basename(filepath).startswith("request_stats_"):
                 summary_files.add(filepath)
 
@@ -186,14 +163,12 @@ def finalize_summaries(summaries_dir: str, workflow_name: str = None, aggregate:
 
     print(f"Found {len(summary_files)} summary file(s)")
 
-    # Group by category_path
     by_path = {}
     for filepath in summary_files:
         try:
             s = load_summary(filepath)
             cp = s.get("category_path")
             if not cp:
-                # Fallback: try to infer from filename or category
                 basename = os.path.basename(filepath)
                 if basename.startswith("summary_placeholder_"):
                     cat = basename.replace("summary_placeholder_", "").replace(".json", "")
@@ -204,47 +179,40 @@ def finalize_summaries(summaries_dir: str, workflow_name: str = None, aggregate:
         except Exception as e:
             print(f"  Could not read {filepath}: {e}")
 
-    # Aggregate request stats from all stats files
-    request_stats = aggregate_request_stats(summaries_dir)
-
     for category_path, files in by_path.items():
         print(f"\n  Processing: {category_path} ({len(files)} file(s))")
 
-        # Aggregate summaries if needed
-        if aggregate and len(files) > 1:
-            summary = aggregate_summaries(files)
+        summary = aggregate_summaries(files)
+        if len(files) > 1:
             print(f"    Aggregated {len(files)} summaries")
-        else:
-            summary = aggregate_summaries(files)
 
-        # Ensure request_metrics exists
         if "request_metrics" not in summary:
             summary["request_metrics"] = {}
 
-        # Merge aggregated request stats
-        summary["request_metrics"].update(request_stats)
-
-        # Add workflow duration (this is the KEY step - added at the END)
+        # Add the TRUE workflow duration (from the GH Actions run itself,
+        # not any per-job/per-batch estimate) and recompute requests_per_min
+        # from it -- this is the only thing finalize adds; requests_total /
+        # requests_failed come straight from dub_writer.py's own numbers.
         summary["request_metrics"]["workflow_duration_sec"] = duration_sec
 
-        # Update workflow name
+        total_requests = summary["request_metrics"].get("requests_total", 0)
+        if duration_sec > 0:
+            summary["request_metrics"]["requests_per_min"] = round(total_requests / (duration_sec / 60.0), 2)
+        else:
+            summary["request_metrics"]["requests_per_min"] = total_requests
+
+        total_failed = summary["request_metrics"].get("requests_failed", len(summary.get("failed_items", [])))
+        summary["request_metrics"]["requests_failed"] = total_failed
+        if total_requests > 0:
+            summary["request_metrics"]["error_rate_pct"] = round(total_failed / total_requests * 100, 2)
+        else:
+            summary["request_metrics"]["error_rate_pct"] = None
+
         if workflow_name:
             summary["workflow_name"] = workflow_name
 
-        # Format failed items summary
         summary["failed_items_summary"] = format_failed_summary(summary.get("failed_items", []))
 
-        # Calculate error_rate_pct if possible
-        total_requests = summary["request_metrics"].get("requests_total", 0)
-        total_failed = len(summary.get("failed_items", []))
-        if total_requests > 0:
-            summary["request_metrics"]["requests_failed"] = total_failed
-            summary["request_metrics"]["error_rate_pct"] = round(total_failed / total_requests * 100, 2)
-        else:
-            summary["request_metrics"]["requests_failed"] = total_failed
-            summary["request_metrics"]["error_rate_pct"] = None
-
-        # Upload to R2
         summary_bytes = json.dumps(summary, ensure_ascii=False, indent=2).encode("utf-8")
         r2_key = f"DUAE/{date_prefix}/{category_path}/summary/summary.json"
 
@@ -260,35 +228,23 @@ def finalize_summaries(summaries_dir: str, workflow_name: str = None, aggregate:
                 category_path=category_path,
             )
             if result:
-                print(f"    ✅ Uploaded: {result}")
+                print(f"    \u2705 Uploaded: {result}")
             else:
-                print(f"    ⚠️ Upload returned None for: {r2_key}")
+                print(f"    \u26a0\ufe0f Upload returned None for: {r2_key}")
         except Exception as e:
-            print(f"    ❌ Upload failed: {e}")
+            print(f"    \u274c Upload failed: {e}")
             print(f"    Would upload to: {r2_key}")
 
-    print(f"\n🎉 Done! Processed {len(by_path)} category(ies).")
+    print(f"\n\U0001f389 Done! Processed {len(by_path)} category(ies).")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Finalize summaries: aggregate, add workflow duration, and upload to R2"
+        description="Finalize summaries: aggregate per category_path, add real workflow duration, upload to R2"
     )
-    parser.add_argument(
-        "--summaries-dir", 
-        default="summaries/", 
-        help="Directory containing summary JSON files"
-    )
-    parser.add_argument(
-        "--workflow", 
-        default=None, 
-        help="Workflow name (e.g., 'Sale Property', 'Motors')"
-    )
-    parser.add_argument(
-        "--aggregate", 
-        action="store_true", 
-        help="Aggregate multiple summaries per category_path (for Property)"
-    )
+    parser.add_argument("--summaries-dir", default="summaries/", help="Directory containing summary JSON files")
+    parser.add_argument("--workflow", default=None, help="Workflow name (e.g., 'Sale Property', 'Motors')")
+    parser.add_argument("--aggregate", action="store_true", help="Aggregate multiple summaries per category_path (for Property)")
     args = parser.parse_args()
 
     finalize_summaries(args.summaries_dir, args.workflow, args.aggregate)

@@ -82,7 +82,7 @@ jobs:
                 
           }
 
-          PAGES_PER_JOB = 50
+          PAGES_PER_JOB = 30
 
           matrix = {"include": []}
 
@@ -99,7 +99,7 @@ jobs:
                   r = requests.post(URL, params=PARAMS, json=payload, timeout=30)
                   data = r.json()
                   nb_pages = data["results"][0]["nbPages"]
-                  nb_pages = 20
+
                   print(f"  {category_name}: {nb_pages} pages")
               except Exception as e:
                   print(f"  Failed: {e}")
@@ -190,7 +190,7 @@ jobs:
               "jobs_wanted": {"index": "by_added_desc_jobs-wanted.com", "filter": '("category_v2.slug_paths":"jobs-wanted")', "hits": []}
           }
 
-          ROWS_PER_BATCH = 1000
+          ROWS_PER_BATCH = 500
           HITS_PER_PAGE = 35
           PAGES_PER_BATCH = math.ceil(ROWS_PER_BATCH / HITS_PER_PAGE)
 
@@ -214,7 +214,7 @@ jobs:
 
               if nb_pages == 0:
                   continue
-              nb_pages = 20
+
               n_batches = math.ceil(nb_pages / PAGES_PER_BATCH)
               print(f"{category_name}: {nb_pages} pages -> {n_batches} batches")
 
