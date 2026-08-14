@@ -3,9 +3,10 @@ import json
 import time
 import requests
 import random
+import re
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 from request_tracker import tracker
-#import pandas as pd
 
 URL = "https://wd0ptz13zs-dsn.algolia.net/1/indexes/*/queries"
 
@@ -78,28 +79,62 @@ CATEGORIES = {
     }
 }
 
-TARGET_DATE = datetime.now(timezone.utc).date() - timedelta(days=1)
+
+dubai_now = datetime.now(ZoneInfo("Asia/Dubai"))
+TARGET_DATE = (dubai_now.date() - timedelta(days=1))
+
+
+def _get_url(absolute_url_value):
+    """Extract URL string from absolute_url field (dict or string)."""
+    if isinstance(absolute_url_value, dict):
+        return absolute_url_value.get("en") or absolute_url_value.get("ar")
+    if isinstance(absolute_url_value, str):
+        return absolute_url_value
+    return None
+
+
+def extract_date_from_url(url: str):
+    """Extract posted date from dubizzle URL path like /2026/7/1/ or /2026/12/25/"""
+    if not url:
+        return None
+    match = re.search(r'/(\d{4})/(\d{1,2})/(\d{1,2})/', url)
+    if match:
+        year, month, day = int(match.group(1)), int(match.group(2)), int(match.group(3))
+        try:
+            return datetime(year, month, day).date()
+        except ValueError:
+            return None
+    return None
+
+
+def get_date_from_timestamp(timestamp_value):
+    """Convert Unix timestamp to Dubai date."""
+    if timestamp_value is None:
+        return None
+    try:
+        dt = datetime.fromtimestamp(int(timestamp_value), tz=timezone.utc)
+        return dt.astimezone(ZoneInfo("Asia/Dubai")).date()
+    except (ValueError, TypeError):
+        return None
+
 
 def filter_yesterday_hits(hits):
     filtered = []
 
     for hit in hits:
-        timestamp_value = hit.get("created_at")
+        post_date = None
 
-        if timestamp_value is None:
-            timestamp_value = hit.get("added")
+        post_date = get_date_from_timestamp(hit.get("created_at"))
 
-        if timestamp_value is None:
+        if post_date is None:
+            url = _get_url(hit.get("absolute_url"))
+            post_date = extract_date_from_url(url)
+
+        if post_date is None:
             continue
 
-        try:
-            dt = datetime.fromtimestamp(int(timestamp_value), tz=timezone.utc)
-
-            if dt.date() == TARGET_DATE:
-                filtered.append(hit)
-
-        except (ValueError, TypeError):
-            pass
+        if post_date == TARGET_DATE:
+            filtered.append(hit)
 
     return filtered
 
@@ -109,7 +144,7 @@ def get_page_with_retry(category: dict, page: int, max_retries: int = 3) -> dict
         "requests": [{
             "indexName": category["index"],
             "query": "",
-            "params": f"page={page}&hitsPerPage=25&filters={category['filter']}",
+            "params": f"page={page}&hitsPerPage=35&filters={category['filter']}",
         }]
     }
 
@@ -136,7 +171,7 @@ def run(category_name: str, start_page: int, end_page: int, output_jsonl: str) -
         return {"success": 0, "failed": 0, "failed_pages": [], "total_pages": 0}
 
     category = CATEGORIES[category_name]
-    print(f"Scraping {category_name} | pages {start_page}-{end_page}")
+    print(f"Scraping {category_name} | pages {start_page}-{end_page} | Target date: {TARGET_DATE}")
 
     hits = []
     failed_pages = []
@@ -153,15 +188,6 @@ def run(category_name: str, start_page: int, end_page: int, output_jsonl: str) -
             continue
 
         try:
-            # page_hits = data["results"][0]["hits"]
-            # print(f"  Page {page}: {len(page_hits)} listings")
-
-            # if not page_hits:
-            #     print(f"  Page {page} has no results, stopping...")
-            #     break
-
-            # hits.extend(page_hits)
-
             page_hits = data["results"][0]["hits"]
             if not page_hits:
                 print(f"  Page {page} has no results, stopping...")
@@ -169,7 +195,7 @@ def run(category_name: str, start_page: int, end_page: int, output_jsonl: str) -
             filtered_hits = filter_yesterday_hits(page_hits)
             print(
                 f"  Page {page}: {len(page_hits)} listings "
-                f"-> kept {len(filtered_hits)}"
+                f"-> kept {len(filtered_hits)} (target: {TARGET_DATE})"
             )
             hits.extend(filtered_hits)
 
@@ -184,9 +210,6 @@ def run(category_name: str, start_page: int, end_page: int, output_jsonl: str) -
     with open(output_jsonl, "w", encoding="utf-8") as f:
         for hit in hits:
             f.write(json.dumps(hit, ensure_ascii=False) + "\n")
-
-    # df = pd.DataFrame(hits)
-    # df.to_csv('outputs.csv', index=False)
 
     if failed_pages:
         failed_file = output_jsonl.replace(".jsonl", "_failed.txt")
