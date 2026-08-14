@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from playwright.sync_api import sync_playwright
 from playwright_stealth import Stealth
 
+WORKFLOW_NAME = os.environ.get("WORKFLOW_NAME", "Unknown")
 
 PROPERTY_CATEGORIES = {
     "rent_residential", "rent_commercial", "rent_rooms_rent_flatmates",
@@ -502,7 +503,7 @@ def build_group_summary(
             "slug": sanitize_name(cat0),
         },
         "category_path": category_path,
-        "workflow_name": "Rent Property and Jobs",
+        "workflow_name": WORKFLOW_NAME,
         "total_subcategories": len(subcategories),
         "total_listings": len(group_df),
         "subcategories": subcategories,
