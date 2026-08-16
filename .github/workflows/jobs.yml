@@ -2,7 +2,7 @@ name: Jobs
 
 on:
   workflow_run:
-    workflows: ["Rent Property2"]
+    workflows: ["Rent Property"]
     types:
       - completed
   workflow_dispatch:
