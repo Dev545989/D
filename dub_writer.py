@@ -208,6 +208,12 @@ def _extract_description(page):
             continue
     return None
 
+def clean_for_excel(val):
+    """Remove control characters illegal in Excel cells."""
+    if isinstance(val, str):
+        # Remove control chars except newline, carriage return, and tab
+        return re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', val)
+    return val
 
 def enrich_with_description(
     df: pd.DataFrame,
@@ -244,7 +250,7 @@ def enrich_with_description(
                     print("    -> Imperva challenge hit, stopping enrichment.")
                     break
 
-                description_col[pos] = _extract_description(page)
+                description_col[pos] = clean_for_excel(_extract_description(page))
 
             except Exception as e:
                 print(f"    -> FAILED: {e}")
