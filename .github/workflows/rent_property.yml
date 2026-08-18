@@ -201,7 +201,7 @@ jobs:
     needs: detect_merge_batches
 
     strategy:
-      max-parallel: 10
+      max-parallel: 5
       fail-fast: false
       matrix: ${{ fromJson(needs.detect_merge_batches.outputs.matrix) }}
     
