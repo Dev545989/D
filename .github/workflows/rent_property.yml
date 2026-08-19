@@ -265,7 +265,7 @@ jobs:
               exit(0)
 
           output_base = "output"
-          result = process_category(category, batch_jsonl, output_base, upload_images=False, enrich_description=False)
+          result = process_category(category, batch_jsonl, output_base, upload_images=False, enrich_description=True)
           print(f"Batch processed: {result['total']} rows | {len(result['excel_files'])} excel files")
 
           if not result["excel_files"]:
