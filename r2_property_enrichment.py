@@ -1,5 +1,5 @@
 """
-R2 Property phone + description enrichment.
+R2 Property (rent/sale) enrichment: agent/agency phone number + description_full.
 
 Unlike classifieds/community/motors, a property listing's phone number is
 NOT obtained by visiting the listing's own page -- it's obtained by visiting
@@ -7,27 +7,38 @@ the *agent* or *agency* profile page that posted the listing (a single
 agent/agency can post hundreds of listings, so the same profile page would
 otherwise get visited over and over).
 
+This script is meant to run as 4 independent workflows:
+  rent  x phone        (--listing-type rent --job-kind phone)
+  rent  x description  (--listing-type rent --job-kind description)
+  sale  x phone        (--listing-type sale --job-kind phone)
+  sale  x description  (--listing-type sale --job-kind description)
+
+Each is a self-contained prepare -> scrape -> combine pipeline that only
+touches its own slice of the data. The phone-number cache
+(profiles-data.xlsx) is kept separate per listing_type (rent vs sale) so the
+two phone workflows can run independently/concurrently without a
+read-modify-write race on a shared cache file.
+
 Pipeline:
-  1) prepare : read today's property Excel files from R2, read the day's
-     cached profiles-data.xlsx (phone per agent/agency slug), and build:
-       - "description" jobs: one per listing missing description_full
-       - "profile" jobs: one per UNIQUE (profile_type, slug) missing a phone
-         and not already cached (deduplicated across ALL listings this run)
-  2) scrape : each job item is either kind="description" (visit the listing
-     page) or kind="profile" (visit the agent/agency profile page).
-  3) combine-profiles : merge new profile phones into profiles-data.xlsx on R2.
-  4) combine : merge new profile phones into the cached profiles-data.xlsx,
-     then re-read EVERY property file for the day and, for every row, fill
-     in description_full (from its own scrape result) and contact_phone_number
-     (looked up from the merged profiles cache by the row's agent/agency slug)
-     -- even for rows whose own file had no scrape job at all.
+  1) prepare : read *yesterday's* (UTC) property Excel files for the given
+     and build ONE job pool depending on --job-kind:
+       - job_kind=description: one job item per listing missing
+         description_full, chunked into job files of 15.
+       - job_kind=phone: one job item per UNIQUE (profile_type, slug) still
+         missing a phone and not already cached, chunked into job files of 10.
+  2) scrape : for description jobs, visit each listing's own page. For phone
+     jobs, visit the agent/agency profile page.
+  3) combine : for job_kind=phone, merge new phones into the cached
+     profiles-data.xlsx, then re-read every candidate listing file and fill
+     in contact_phone_number by looking up each row's agent/agency slug in
+     the merged cache. For job_kind=description, re-read every candidate
+     listing file and fill in description_full from its own scrape result.
 """
 
 from __future__ import annotations
 
 import argparse
 import ast
-import glob
 import io
 import json
 import os
@@ -44,17 +55,18 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-R2_ACCESS_KEY = os.getenv("CF_R2_ACCESS_KEY_ID")
-R2_SECRET_KEY = os.getenv("CF_R2_SECRET_ACCESS_KEY")
-R2_ENDPOINT = os.getenv("CF_R2_ENDPOINT_URL", "").rstrip("/")
-R2_BUCKET = os.getenv("CF_R2_BUCKET_NAME", "")
+R2_BUCKET = os.environ["CF_R2_BUCKET_NAME"]
+R2_ENDPOINT = os.environ["CF_R2_ENDPOINT_URL"]
+R2_ACCESS_KEY = os.environ["CF_R2_ACCESS_KEY_ID"]
+R2_SECRET_KEY = os.environ["CF_R2_SECRET_ACCESS_KEY"]
 
-# NOTE: the property scraper (rent_property.yml -> final_merge) saves under
-# f"DUAE/{date_prefix}/{category_path}/..." where date_prefix is built from
-# datetime.now() with NO explicit timezone -- i.e. the runner's local/UTC date
-# on the day the scraper actually ran, not "yesterday". So when THIS script
-# runs the next day, "yesterday" (UTC) should line up with that save date.
-# Verify against a real R2 run and pass --date explicitly if it doesn't match.
+# NOTE: the property raw scraper (rent_property.yml / rent_property2.yml ->
+# final_merge) saves under f"DUAE/{date_prefix}/{category_path}/..." where
+# date_prefix is built from datetime.now() with NO explicit timezone -- i.e.
+# the runner's UTC date at the moment the upload step actually runs. This
+# enrichment pipeline runs the day AFTER the raw scrape, so "running today
+# reads yesterday's (UTC) R2 folder" (see yesterday_prefix below) -- e.g.
+# running on 9/7 reads the 9/6 folder. Pass --date explicitly to override.
 DUAE_PREFIX = os.getenv("MOTORS_PREFIX", "DUAE")
 PROPERTY_ROOT = "property"
 
@@ -81,6 +93,10 @@ def r2_client():
 
 
 def yesterday_prefix(date_str: str | None = None) -> tuple[str, str]:
+    """Confirmed behavior: running today should read R2 data uploaded
+    *yesterday* (UTC) by the raw property scraper -- e.g. running on 9/7
+    reads the 9/6 folder. Pass --date explicitly to override for a
+    manual/backfill run."""
     if date_str:
         target = datetime.strptime(date_str, "%Y-%m-%d").date()
     else:
@@ -432,7 +448,13 @@ def reveal_phone_from_profile(page, timeout_ms=10000) -> tuple[str | None, str]:
 # prepare
 # --------------------------------------------------------------------------
 
-def prepare(date_str: str | None, out_dir: str, categories: str = "", job_type: str = "all"):
+LISTING_TYPE_PATH_FRAGMENTS = {
+    "rent": "property-for-rent",
+    "sale": "property-for-sale",
+}
+
+
+def prepare(date_str: str | None, out_dir: str, listing_type: str, job_kind: str, categories: str = ""):
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     jobs_dir = out / "jobs"
@@ -443,6 +465,12 @@ def prepare(date_str: str | None, out_dir: str, categories: str = "", job_type: 
 
     property_prefix = f"{day_prefix}{PROPERTY_ROOT}/"
     keys = list_keys(client, property_prefix)
+
+    # Required split: rent vs sale (each of the 4 workflows only touches its own side).
+    listing_fragment = LISTING_TYPE_PATH_FRAGMENTS[listing_type]
+    before_type = len(keys)
+    keys = [k for k in keys if matches_categories(k, [listing_fragment])]
+    print(f"[PREPARE] Listing type: {listing_type} ('{listing_fragment}') -> {len(keys)} file(s) (was {before_type})")
 
     category_slugs = [c.strip().lower().replace("_", "-") for c in categories.split(",") if c.strip()]
     if category_slugs:
@@ -457,16 +485,29 @@ def prepare(date_str: str | None, out_dir: str, categories: str = "", job_type: 
         print(f"[PREPARE] Category filter: {category_slugs}")
         print(f"[PREPARE] Files after category filter: {len(keys)} (was {before})")
 
-    print(f"[PREPARE] Date: {date_iso}")
+    print(f"[PREPARE] Job kind: {job_kind}")
+    print(f"[PREPARE] Date (yesterday, UTC -- matches raw-scraper upload day): {date_iso}")
     print(f"[PREPARE] Found {len(keys)} property Excel file(s).")
 
-    profiles_key = f"{property_prefix}profiles-data/profiles-data.xlsx"
-    cached_profiles = read_cached_profiles(client, profiles_key)
-    print(f"[PREPARE] Profiles cache: {profiles_key}")
-    print(f"[PREPARE] Cached profiles with phone: {len(cached_profiles)}")
+    if not keys:
+        print("[PREPARE][WARN] No property files found for this date/listing-type.")
+        print("[PREPARE][WARN] If unexpected: try --date YYYY-MM-DD, or confirm the")
+        print("[PREPARE][WARN] raw scraper actually uploaded under this UTC date.")
+
+    # Cache is kept separate per listing_type (rent vs sale) on purpose: the
+    # rent and sale enrichment workflows can run independently/concurrently,
+    # and a single shared cache file would risk a lost update if both write
+    # to it around the same time. The trade-off: an agency posting both rent
+    # and sale listings gets scraped once per side instead of once overall.
+    profiles_key = f"{property_prefix}{listing_fragment}/profiles-data/profiles-data.xlsx"
+    cached_profiles = read_cached_profiles(client, profiles_key) if job_kind == "phone" else {}
+    if job_kind == "phone":
+        print(f"[PREPARE] Profiles cache: {profiles_key}")
+        print(f"[PREPARE] Cached profiles with phone: {len(cached_profiles)}")
 
     description_work = []
     profiles_to_scrape: dict[str, dict] = {}
+    candidate_files = set()
 
     for key in keys:
         sheets = excel_sheets(download_bytes(client, key))
@@ -480,45 +521,47 @@ def prepare(date_str: str | None, out_dir: str, categories: str = "", job_type: 
                     continue
                 listing_id = str(listing_id)
 
-                description_missing = is_empty(row.get(DESCRIPTION_COLUMN))
-                if description_missing:
-                    description_work.append({
-                        "kind": "description",
-                        "file_key": key,
-                        "sheet_name": sheet_name,
-                        "row_position": row_pos,
-                        "id": listing_id,
-                        "absolute_url": row.get(ABS_URL_COLUMN),
-                    })
+                if job_kind == "description":
+                    if is_empty(row.get(DESCRIPTION_COLUMN)):
+                        candidate_files.add(key)
+                        description_work.append({
+                            "kind": "description",
+                            "file_key": key,
+                            "sheet_name": sheet_name,
+                            "row_position": row_pos,
+                            "id": listing_id,
+                            "absolute_url": row.get(ABS_URL_COLUMN),
+                        })
 
-                phone_missing = is_empty(row.get(PHONE_COLUMN))
-                if phone_missing:
-                    profile_type, slug = extract_agent_slug(row)
-                    if profile_type and slug:
-                        cache_key = profile_cache_key(profile_type, slug)
-                        if cache_key not in cached_profiles and cache_key not in profiles_to_scrape:
-                            profiles_to_scrape[cache_key] = {
-                                "kind": "profile",
-                                "profile_type": profile_type,
-                                "slug": slug,
-                            }
+                elif job_kind == "phone":
+                    if is_empty(row.get(PHONE_COLUMN)):
+                        profile_type, slug = extract_agent_slug(row)
+                        if profile_type and slug:
+                            candidate_files.add(key)
+                            cache_key = profile_cache_key(profile_type, slug)
+                            if cache_key not in cached_profiles and cache_key not in profiles_to_scrape:
+                                profiles_to_scrape[cache_key] = {
+                                    "kind": "profile",
+                                    "profile_type": profile_type,
+                                    "slug": slug,
+                                }
 
-    print(f"[PREPARE] Total listings needing description: {len(description_work)}")
-    print(f"[PREPARE] Total unique agent/agency profiles needing phone: {len(profiles_to_scrape)}")
+    if job_kind == "description":
+        print(f"[PREPARE] Listings needing description: {len(description_work)}")
+    else:
+        print(f"[PREPARE] Unique agent/agency profiles needing phone: {len(profiles_to_scrape)}")
+    print(f"[PREPARE] Candidate files to revisit at combine time: {len(candidate_files)}")
 
     manifest = []
-    description_chunks = []
-    profile_chunks = []
-
-    if job_type in ("all", "description"):
+    if job_kind == "description":
         description_chunks = [description_work[i:i + 15] for i in range(0, len(description_work), 15)]
         for idx, chunk in enumerate(description_chunks):
             path = jobs_dir / f"desc_{idx:05d}.json"
             path.write_text(json.dumps(chunk, ensure_ascii=False, default=str, indent=2), encoding="utf-8")
             manifest.append(str(path.relative_to(out)))
-
-    if job_type in ("all", "profile"):
-        profile_chunks = [list(profiles_to_scrape.values())[i:i + 10] for i in range(0, len(profiles_to_scrape), 10)]
+    else:
+        profile_list = list(profiles_to_scrape.values())
+        profile_chunks = [profile_list[i:i + 10] for i in range(0, len(profile_list), 10)]
         for idx, chunk in enumerate(profile_chunks):
             path = jobs_dir / f"profile_{idx:05d}.json"
             path.write_text(json.dumps(chunk, ensure_ascii=False, default=str, indent=2), encoding="utf-8")
@@ -529,18 +572,20 @@ def prepare(date_str: str | None, out_dir: str, categories: str = "", job_type: 
             "date": date_iso,
             "prefix": day_prefix,
             "property_prefix": property_prefix,
+            "listing_type": listing_type,
+            "job_kind": job_kind,
             "category_slugs": category_slugs,
             "profiles_key": profiles_key,
-            "listing_keys": keys,
+            "candidate_files": sorted(candidate_files),
             "jobs": manifest,
-            "total_description_items": len(description_work) if job_type in ("all", "description") else 0,
-            "total_profile_items": len(profiles_to_scrape) if job_type in ("all", "profile") else 0,
+            "total_description_items": len(description_work),
+            "total_profile_items": len(profiles_to_scrape),
             "total_jobs": len(manifest),
         }, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
-    print(f"[PREPARE] Jobs Generated: {len(manifest)} (job_type='{job_type}')")
+    print(f"[PREPARE] Jobs: {len(manifest)} ({job_kind})")
     print(f"[PREPARE] Manifest: {out / 'manifest.json'}")
 
 
@@ -658,8 +703,7 @@ def _scrape_profile_item(page, item: dict) -> dict:
             phone, status = reveal_phone_from_profile(page)
             result["phone"] = phone
             result["phone_status"] = status
-            #print(f"  -> phone: {phone} (status: {status})")
-            print(f"  -> phone: (status: {status})")
+            print(f"  -> phone: {phone} (status: {status})")
             return result
         except Exception as exc:
             if attempt == 0:
@@ -674,65 +718,6 @@ def _scrape_profile_item(page, item: dict) -> dict:
 
 
 # --------------------------------------------------------------------------
-# combine-profiles (NEW)
-# --------------------------------------------------------------------------
-
-def combine_profiles(results_dir: str, date_str: str | None):
-    root = Path(results_dir)
-    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
-    profiles_key = manifest["profiles_key"]
-    client = r2_client()
-
-    result_files = sorted((root / "results").glob("*.json"))
-    all_results = []
-    for path in result_files:
-        try:
-            all_results.extend(json.loads(path.read_text(encoding="utf-8")))
-        except Exception as e:
-            print(f"[WARN] Failed to read result file {path}: {e}")
-
-    new_profiles = {}
-    for r in all_results:
-        if r.get("kind") == "profile":
-            profile_type = r.get("profile_type")
-            slug = r.get("slug")
-            phone = r.get("phone")
-            if profile_type and slug and not is_empty(phone) and r.get("phone_status") == "ok":
-                new_profiles[profile_cache_key(profile_type, slug)] = {
-                    "profile_type": profile_type,
-                    "slug": slug,
-                    PHONE_COLUMN: phone,
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                }
-
-    print(f"[COMBINE-PROFILES] Found {len(new_profiles)} new profile phone numbers.")
-
-    old_profiles = read_cached_profiles(client, profiles_key)
-    merged_profiles = {}
-    for cache_key, row in old_profiles.items():
-        merged_profiles[cache_key] = {
-            "profile_type": row.get("profile_type"),
-            "slug": row.get("slug"),
-            PHONE_COLUMN: row.get(PHONE_COLUMN),
-            "updated_at": row.get("updated_at"),
-        }
-    for cache_key, row in new_profiles.items():
-        if cache_key not in merged_profiles or is_empty(merged_profiles[cache_key].get(PHONE_COLUMN)):
-            merged_profiles[cache_key] = row
-
-    profiles_df = pd.DataFrame(list(merged_profiles.values()))
-    if not profiles_df.empty:
-        profiles_df = profiles_df.drop_duplicates(subset=["profile_type", "slug"], keep="last")
-        upload_bytes(
-            client,
-            profiles_key,
-            build_excel_bytes({"profiles": profiles_df}),
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-        print(f"[COMBINE-PROFILES] Successfully uploaded updated profiles-data.xlsx to R2: {len(profiles_df)} total profiles")
-
-
-# --------------------------------------------------------------------------
 # combine
 # --------------------------------------------------------------------------
 
@@ -740,17 +725,15 @@ def combine(results_dir: str, date_str: str | None):
     root = Path(results_dir)
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
     date_iso = manifest["date"]
+    job_kind = manifest["job_kind"]
     profiles_key = manifest["profiles_key"]
-    listing_keys = manifest["listing_keys"]
+    candidate_files = manifest["candidate_files"]
     client = r2_client()
 
     result_files = sorted((root / "results").glob("*.json"))
     all_results = []
     for path in result_files:
-        try:
-            all_results.extend(json.loads(path.read_text(encoding="utf-8")))
-        except Exception as e:
-            print(f"[WARN] Failed to read result file {path}: {e}")
+        all_results.extend(json.loads(path.read_text(encoding="utf-8")))
 
     description_updates = {}
     new_profiles = {}
@@ -771,39 +754,42 @@ def combine(results_dir: str, date_str: str | None):
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 }
 
-    # Merge profiles cache (new phones only added, cache never loses a phone
-    # it already had).
-    old_profiles = read_cached_profiles(client, profiles_key)
+    old_profiles = {}
     merged_profiles = {}
-    for cache_key, row in old_profiles.items():
-        merged_profiles[cache_key] = {
-            "profile_type": row.get("profile_type"),
-            "slug": row.get("slug"),
-            PHONE_COLUMN: row.get(PHONE_COLUMN),
-            "updated_at": row.get("updated_at"),
-        }
-    for cache_key, row in new_profiles.items():
-        if cache_key not in merged_profiles or is_empty(merged_profiles[cache_key].get(PHONE_COLUMN)):
-            merged_profiles[cache_key] = row
 
-    profiles_df = pd.DataFrame(list(merged_profiles.values()))
-    if not profiles_df.empty:
-        profiles_df = profiles_df.drop_duplicates(subset=["profile_type", "slug"], keep="last")
-        upload_bytes(
-            client,
-            profiles_key,
-            build_excel_bytes({"profiles": profiles_df}),
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-        print(f"[COMBINE] profiles-data: {len(profiles_df)} profiles")
+    if job_kind == "phone":
+        # Merge profiles cache (new phones only added, cache never loses a
+        # phone it already had).
+        old_profiles = read_cached_profiles(client, profiles_key)
+        for cache_key, row in old_profiles.items():
+            merged_profiles[cache_key] = {
+                "profile_type": row.get("profile_type"),
+                "slug": row.get("slug"),
+                PHONE_COLUMN: row.get(PHONE_COLUMN),
+                "updated_at": row.get("updated_at"),
+            }
+        for cache_key, row in new_profiles.items():
+            if cache_key not in merged_profiles or is_empty(merged_profiles[cache_key].get(PHONE_COLUMN)):
+                merged_profiles[cache_key] = row
 
-    # Re-read EVERY property file for the day (not just ones touched by a
-    # scrape job) and fill in description_full + contact_phone_number.
+        profiles_df = pd.DataFrame(list(merged_profiles.values()))
+        if not profiles_df.empty:
+            profiles_df = profiles_df.drop_duplicates(subset=["profile_type", "slug"], keep="last")
+            upload_bytes(
+                client,
+                profiles_key,
+                build_excel_bytes({"profiles": profiles_df}),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+            print(f"[COMBINE] profiles-data: {len(profiles_df)} profiles")
+
+    # Only re-touch the files this job_kind actually flagged in prepare() --
+    # not every property file for the day.
     changed_files = 0
     phones_filled = 0
     descriptions_filled = 0
 
-    for key in listing_keys:
+    for key in candidate_files:
         try:
             sheets = excel_sheets(download_bytes(client, key))
         except Exception as exc:
@@ -815,33 +801,38 @@ def combine(results_dir: str, date_str: str | None):
         for sheet_name, df in sheets.items():
             if "id" not in df.columns:
                 continue
-            if PHONE_COLUMN not in df.columns:
-                df[PHONE_COLUMN] = None
-            df[PHONE_COLUMN] = df[PHONE_COLUMN].astype(object)
-            if DESCRIPTION_COLUMN not in df.columns:
-                df[DESCRIPTION_COLUMN] = None
-            df[DESCRIPTION_COLUMN] = df[DESCRIPTION_COLUMN].astype(object)
+
+            if job_kind == "description":
+                if DESCRIPTION_COLUMN not in df.columns:
+                    df[DESCRIPTION_COLUMN] = None
+                df[DESCRIPTION_COLUMN] = df[DESCRIPTION_COLUMN].astype(object)
+            else:
+                if PHONE_COLUMN not in df.columns:
+                    df[PHONE_COLUMN] = None
+                df[PHONE_COLUMN] = df[PHONE_COLUMN].astype(object)
 
             for pos, (_, row) in enumerate(df.iterrows()):
                 listing_id = row.get("id")
                 if is_empty(listing_id):
                     continue
 
-                u = description_updates.get((key, sheet_name, str(listing_id)))
-                if u and u.get("description_status") == "ok" and not is_empty(u.get("description_full")):
-                    df.at[df.index[pos], DESCRIPTION_COLUMN] = u["description_full"]
-                    changed = True
-                    descriptions_filled += 1
+                if job_kind == "description":
+                    u = description_updates.get((key, sheet_name, str(listing_id)))
+                    if u and u.get("description_status") == "ok" and not is_empty(u.get("description_full")):
+                        df.at[df.index[pos], DESCRIPTION_COLUMN] = u["description_full"]
+                        changed = True
+                        descriptions_filled += 1
 
-                if is_empty(row.get(PHONE_COLUMN)):
-                    profile_type, slug = extract_agent_slug(row)
-                    if profile_type and slug:
-                        cached = merged_profiles.get(profile_cache_key(profile_type, slug))
-                        phone = cached.get(PHONE_COLUMN) if cached else None
-                        if not is_empty(phone):
-                            df.at[df.index[pos], PHONE_COLUMN] = str(phone).strip()
-                            changed = True
-                            phones_filled += 1
+                else:
+                    if is_empty(row.get(PHONE_COLUMN)):
+                        profile_type, slug = extract_agent_slug(row)
+                        if profile_type and slug:
+                            cached = merged_profiles.get(profile_cache_key(profile_type, slug))
+                            phone = cached.get(PHONE_COLUMN) if cached else None
+                            if not is_empty(phone):
+                                df.at[df.index[pos], PHONE_COLUMN] = str(phone).strip()
+                                changed = True
+                                phones_filled += 1
 
             sheets[sheet_name] = df
 
@@ -859,9 +850,10 @@ def combine(results_dir: str, date_str: str | None):
 
     summary = {
         "date": date_iso,
+        "job_kind": job_kind,
         "result_files": len(result_files),
         "result_rows": len(all_results),
-        "listing_files_scanned": len(listing_keys),
+        "candidate_files": len(candidate_files),
         "changed_listing_files": changed_files,
         "descriptions_filled": descriptions_filled,
         "phones_filled": phones_filled,
@@ -876,48 +868,37 @@ def combine(results_dir: str, date_str: str | None):
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
-# --------------------------------------------------------------------------
-# CLI Entrypoint
-# --------------------------------------------------------------------------
-
 def main():
-    parser = argparse.ArgumentParser(description="Property Enrichment Script")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="command", required=True)
 
-    prepare_parser = subparsers.add_parser("prepare")
-    prepare_parser.add_argument("--date", type=str, default=None)
-    prepare_parser.add_argument("--out", type=str, default="work")
-    prepare_parser.add_argument("--categories", type=str, default="")
-    prepare_parser.add_argument(
-        "--job-type", 
-        type=str, 
-        choices=["all", "profile", "description"], 
-        default="all",
-        help="Filter jobs by type: profile, description, or all"
+    p = sub.add_parser("prepare")
+    p.add_argument("--date", default=None, help="YYYY-MM-DD; defaults to yesterday (UTC)")
+    p.add_argument("--out", default="work")
+    p.add_argument("--listing-type", required=True, choices=["rent", "sale"])
+    p.add_argument("--job-kind", required=True, choices=["phone", "description"])
+    p.add_argument(
+        "--categories",
+        default="",
+        help="Comma-separated category slugs to further filter files by (e.g. 'residential,commercial'). Empty = no filter.",
     )
 
-    scrape_parser = subparsers.add_parser("scrape")
-    scrape_parser.add_argument("--job", type=str, required=True)
-    scrape_parser.add_argument("--output", type=str, required=True)
+    s = sub.add_parser("scrape")
+    s.add_argument("--job", required=True)
+    s.add_argument("--output", required=True)
 
-    combine_profiles_parser = subparsers.add_parser("combine-profiles")
-    combine_profiles_parser.add_argument("--work", type=str, required=True)
-    combine_profiles_parser.add_argument("--date", type=str, default=None)
-
-    combine_parser = subparsers.add_parser("combine")
-    combine_parser.add_argument("--work", type=str, required=True)
-    combine_parser.add_argument("--date", type=str, default=None)
+    c = sub.add_parser("combine")
+    c.add_argument("--date", default=None)
+    c.add_argument("--work", default="work")
 
     args = parser.parse_args()
 
     if args.command == "prepare":
-        prepare(date_str=args.date, out_dir=args.out, categories=args.categories or "", job_type=args.job_type)
+        prepare(args.date, args.out, args.listing_type, args.job_kind, args.categories)
     elif args.command == "scrape":
-        scrape_job(job_file=args.job, output_file=args.output)
-    elif args.command == "combine-profiles":
-        combine_profiles(results_dir=args.work, date_str=args.date)
+        scrape_job(args.job, args.output)
     elif args.command == "combine":
-        combine(results_dir=args.work, date_str=args.date)
+        combine(args.work, args.date)
 
 
 if __name__ == "__main__":

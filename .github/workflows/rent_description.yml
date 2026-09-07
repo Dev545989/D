@@ -1,0 +1,227 @@
+name: Property Rent Description Enrichment
+
+on:
+  workflow_run:
+    workflows: ["Property Rent Phone Enrichment"]
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Date to enrich (YYYY-MM-DD). Leave empty for yesterday in UTC."
+        required: false
+        type: string
+  schedule:
+    - cron: "0 2 * * *"  # after the rent scrapers (Rent Property / Rent Property2) should be done
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  BATCH_SIZE: "15"  # job files per matrix entry (keeps matrix under 256)
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      has_jobs: ${{ steps.matrix.outputs.has_jobs }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          camoufox fetch
+
+      - name: Prepare description jobs (rent)
+        env:
+          CF_R2_ACCESS_KEY_ID: ${{ secrets.CF_R2_ACCESS_KEY_ID }}
+          CF_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_R2_SECRET_ACCESS_KEY }}
+          CF_R2_ENDPOINT_URL: ${{ secrets.CF_R2_ENDPOINT_URL }}
+          CF_R2_BUCKET_NAME: ${{ secrets.CF_R2_BUCKET_NAME }}
+        run: |
+          if [ -n "${{ inputs.date }}" ]; then
+            python r2_property_enrichment.py prepare --date "${{ inputs.date }}" --out work --listing-type rent --job-kind description
+          else
+            python r2_property_enrichment.py prepare --out work --listing-type rent --job-kind description
+          fi
+
+      - name: Build matrix with batching
+        id: matrix
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          manifest = json.loads(Path("work/manifest.json").read_text(encoding="utf-8"))
+          jobs = manifest["jobs"]
+          batch_size = int(os.environ.get("BATCH_SIZE", "10"))
+
+          batches = []
+          for i in range(0, len(jobs), batch_size):
+              batch = jobs[i:i + batch_size]
+              batches.append({"batch_id": i // batch_size, "files": batch})
+
+          matrix = {"batch": batches}
+          print("matrix:", json.dumps(matrix))
+          print(f"total_jobs: {len(jobs)}, batches: {len(batches)}, batch_size: {batch_size}")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+              f.write(f"matrix={json.dumps(matrix)}\n")
+              f.write(f"has_jobs={'true' if batches else 'false'}\n")
+          PY
+
+      - name: Upload work manifest and jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: rent-description-work
+          path: work/
+          if-no-files-found: error
+          retention-days: 2
+
+  scrape:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.has_jobs == 'true' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Install Camoufox browser
+        run: |
+          python -m camoufox fetch
+
+      - name: Download prepared jobs
+        uses: actions/download-artifact@v4
+        with:
+          name: rent-description-work
+          path: work
+
+      - name: Scrape batch ${{ matrix.batch.batch_id }}
+        env:
+          PYTHONUNBUFFERED: "1"
+          MATRIX_BATCH: ${{ toJSON(matrix.batch) }}
+        run: |
+          mkdir -p work/results
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          batch = json.loads(os.environ["MATRIX_BATCH"])
+          files = batch["files"]
+          batch_id = batch["batch_id"]
+
+          print(f"[BATCH {batch_id}] Processing {len(files)} job file(s)...")
+
+          for job_file in files:
+              job_path = Path("work") / job_file
+              job_name = Path(job_file).stem
+              output_path = Path("work/results") / f"{job_name}.json"
+
+              print(f"  -> {job_file}")
+              result = subprocess.run(
+                  [sys.executable, "r2_property_enrichment.py", "scrape",
+                   "--job", str(job_path), "--output", str(output_path)],
+                  capture_output=False,
+              )
+              if result.returncode != 0:
+                  print(f"  [WARN] {job_file} failed with code {result.returncode}")
+
+          print(f"[BATCH {batch_id}] Done")
+          PY
+
+      - name: Upload scrape results
+        uses: actions/upload-artifact@v4
+        with:
+          name: rent-description-result-batch-${{ matrix.batch.batch_id }}
+          path: work/results/*.json
+          if-no-files-found: warn
+          retention-days: 2
+
+  combine:
+    needs:
+      - prepare
+      - scrape
+    if: ${{ always() && needs.prepare.result == 'success' }}
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas openpyxl boto3 python-dotenv
+
+      - name: Download prepared work
+        uses: actions/download-artifact@v4
+        with:
+          name: rent-description-work
+          path: work
+
+      - name: Download scrape results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: rent-description-result-batch-*
+          path: work/results
+          merge-multiple: true
+          if-no-artifact-found: warn
+
+      - name: Combine (fill description into rent listings)
+        env:
+          CF_R2_ACCESS_KEY_ID: ${{ secrets.CF_R2_ACCESS_KEY_ID }}
+          CF_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_R2_SECRET_ACCESS_KEY }}
+          CF_R2_ENDPOINT_URL: ${{ secrets.CF_R2_ENDPOINT_URL }}
+          CF_R2_BUCKET_NAME: ${{ secrets.CF_R2_BUCKET_NAME }}
+        run: |
+          if [ -n "${{ inputs.date }}" ]; then
+            python r2_property_enrichment.py combine --date "${{ inputs.date }}" --work work
+          else
+            python r2_property_enrichment.py combine --work work
+          fi
+
+      - name: Upload combine summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: rent-description-summary
+          path: work/combine_summary.json
+          if-no-files-found: warn
+          retention-days: 7
