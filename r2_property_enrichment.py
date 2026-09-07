@@ -55,10 +55,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-R2_BUCKET = os.environ["CF_R2_BUCKET_NAME"]
-R2_ENDPOINT = os.environ["CF_R2_ENDPOINT_URL"]
-R2_ACCESS_KEY = os.environ["CF_R2_ACCESS_KEY_ID"]
-R2_SECRET_KEY = os.environ["CF_R2_SECRET_ACCESS_KEY"]
+R2_ACCESS_KEY = os.getenv("CF_R2_ACCESS_KEY_ID")
+R2_SECRET_KEY = os.getenv("CF_R2_SECRET_ACCESS_KEY")
+R2_ENDPOINT = os.getenv("CF_R2_ENDPOINT_URL", "").rstrip("/")
+R2_BUCKET = os.getenv("CF_R2_BUCKET_NAME", "")
 
 # NOTE: the property raw scraper (rent_property.yml / rent_property2.yml ->
 # final_merge) saves under f"DUAE/{date_prefix}/{category_path}/..." where
