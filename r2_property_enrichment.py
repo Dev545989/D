@@ -658,7 +658,8 @@ def _scrape_profile_item(page, item: dict) -> dict:
             phone, status = reveal_phone_from_profile(page)
             result["phone"] = phone
             result["phone_status"] = status
-            print(f"  -> phone: {phone} (status: {status})")
+            #print(f"  -> phone: {phone} (status: {status})")
+            print(f"  -> phone: (status: {status})")
             return result
         except Exception as exc:
             if attempt == 0:
