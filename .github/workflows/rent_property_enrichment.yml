@@ -95,8 +95,12 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install camoufox pandas openpyxl boto3 python-dotenv
-          camoufox fetch
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Install Camoufox browser
+        run: |
+          python -m camoufox fetch
 
       - name: Download profiles work artifact
         uses: actions/download-artifact@v4
@@ -132,7 +136,9 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install pandas openpyxl boto3 python-dotenv
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas openpyxl boto3 python-dotenv
 
       - name: Download profiles work artifact
         uses: actions/download-artifact@v4
