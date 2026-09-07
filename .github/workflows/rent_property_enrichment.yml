@@ -11,7 +11,10 @@ on:
         default: ''
 
 jobs:
-  prepare:
+  # ==========================================
+  # PHASE 1: PROFILES ENRICHMENT
+  # ==========================================
+  prepare_profiles:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -27,10 +30,9 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: |
-          pip install pandas openpyxl boto3 python-dotenv
+        run: pip install pandas openpyxl boto3 python-dotenv
 
-      - name: Prepare enrichment jobs
+      - name: Prepare Profiles Jobs
         id: set-matrix
         env:
           CF_R2_ACCESS_KEY_ID: ${{ secrets.CF_R2_ACCESS_KEY_ID }}
@@ -40,18 +42,16 @@ jobs:
         run: |
           python r2_property_enrichment.py prepare \
             ${{ inputs.target_date && format('--date {0}', inputs.target_date) || '' }} \
-            --out work \
-            --categories "rent"
+            --out work_profiles \
+            --categories "rent" \
+            --job-type profile
 
-          if [ -f "work/manifest.json" ]; then
-            TOTAL_JOBS=$(jq '.total_jobs' work/manifest.json)
+          if [ -f "work_profiles/manifest.json" ]; then
+            TOTAL_JOBS=$(jq '.total_jobs' work_profiles/manifest.json)
             echo "total_jobs=$TOTAL_JOBS" >> "$GITHUB_OUTPUT"
-            
             if [ "$TOTAL_JOBS" -gt 0 ]; then
               echo "has_jobs=true" >> "$GITHUB_OUTPUT"
-              # بناء Matrix يحتوي على قائمة الملفات المُولدة
-              MATRIX_JSON=$(jq -c '{job_file: .jobs}' work/manifest.json)
-              echo "matrix=$MATRIX_JSON" >> "$GITHUB_OUTPUT"
+              echo "matrix=$(jq -c '{job_file: .jobs}' work_profiles/manifest.json)" >> "$GITHUB_OUTPUT"
             else
               echo "has_jobs=false" >> "$GITHUB_OUTPUT"
               echo 'matrix={"job_file":[]}' >> "$GITHUB_OUTPUT"
@@ -61,22 +61,22 @@ jobs:
             echo 'matrix={"job_file":[]}' >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Upload prepare manifest & jobs artifact
+      - name: Upload prepare profiles artifact
         if: steps.set-matrix.outputs.has_jobs == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: property-rent-enrichment-work
-          path: work/
+          name: rent-profiles-work
+          path: work_profiles/
           retention-days: 1
 
-  scrape:
-    needs: prepare
-    if: needs.prepare.outputs.has_jobs == 'true'
+  scrape_profiles:
+    needs: prepare_profiles
+    if: needs.prepare_profiles.outputs.has_jobs == 'true'
     runs-on: ubuntu-latest
     strategy:
-      max-parallel: 5
+      max-parallel: 15
       fail-fast: false
-      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+      matrix: ${{ fromJson(needs.prepare_profiles.outputs.matrix) }}
 
     steps:
       - name: Checkout repo
@@ -86,37 +86,41 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      - name: Cache Camoufox
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/camoufox
+          key: ${{ runner.os }}-camoufox
 
       - name: Install dependencies
         run: |
           pip install camoufox pandas openpyxl boto3 python-dotenv
           camoufox fetch
 
-      - name: Download work artifact
+      - name: Download profiles work artifact
         uses: actions/download-artifact@v4
         with:
-          name: property-rent-enrichment-work
-          path: work/
+          name: rent-profiles-work
+          path: work_profiles/
 
-      - name: Scrape job
+      - name: Scrape Profiles
         run: |
-          JOB_FILE="work/${{ matrix.job_file }}"
+          JOB_FILE="work_profiles/${{ matrix.job_file }}"
           JOB_NAME=$(basename "${{ matrix.job_file }}" .json)
-          mkdir -p work/results
-          OUTPUT_FILE="work/results/result_${JOB_NAME}.json"
-          
-          python r2_property_enrichment.py scrape --job "$JOB_FILE" --output "$OUTPUT_FILE"
+          mkdir -p work_profiles/results
+          python r2_property_enrichment.py scrape --job "$JOB_FILE" --output "work_profiles/results/result_${JOB_NAME}.json"
 
-      - name: Upload result artifact
+      - name: Upload profile result artifact
         uses: actions/upload-artifact@v4
         with:
-          name: property-rent-result-${{ strategy.job-index }}
-          path: work/results/
+          name: rent-profile-result-${{ strategy.job-index }}
+          path: work_profiles/results/
           retention-days: 1
 
-  combine:
-    needs: [prepare, scrape]
-    if: needs.prepare.outputs.has_jobs == 'true' && always()
+  combine_profiles:
+    needs: [prepare_profiles, scrape_profiles]
+    if: needs.prepare_profiles.outputs.has_jobs == 'true' && always()
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
@@ -128,23 +132,173 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: |
-          pip install pandas openpyxl boto3 python-dotenv
+        run: pip install pandas openpyxl boto3 python-dotenv
 
-      - name: Download work artifact
+      - name: Download profiles work artifact
         uses: actions/download-artifact@v4
         with:
-          name: property-rent-enrichment-work
-          path: work/
+          name: rent-profiles-work
+          path: work_profiles/
 
-      - name: Download all result artifacts
+      - name: Download profile results
         uses: actions/download-artifact@v4
         with:
-          pattern: property-rent-result-*
-          path: work/results/
+          pattern: rent-profile-result-*
+          path: work_profiles/results/
           merge-multiple: true
 
-      - name: Combine & update R2
+      - name: Combine profiles & update profiles-data.xlsx on R2
+        env:
+          CF_R2_ACCESS_KEY_ID: ${{ secrets.CF_R2_ACCESS_KEY_ID }}
+          CF_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_R2_SECRET_ACCESS_KEY }}
+          CF_R2_ENDPOINT_URL: ${{ secrets.CF_R2_ENDPOINT_URL }}
+          CF_R2_BUCKET_NAME: ${{ secrets.CF_R2_BUCKET_NAME }}
+        run: |
+          python r2_property_enrichment.py combine-profiles \
+            --work work_profiles \
+            ${{ inputs.target_date && format('--date {0}', inputs.target_date) || '' }}
+
+  # ==========================================
+  # PHASE 2: DESCRIPTIONS ENRICHMENT
+  # ==========================================
+  prepare_descriptions:
+    needs: combine_profiles
+    if: always()
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      total_jobs: ${{ steps.set-matrix.outputs.total_jobs }}
+      has_jobs: ${{ steps.set-matrix.outputs.has_jobs }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pandas openpyxl boto3 python-dotenv
+
+      - name: Prepare Descriptions Jobs (Re-checking against updated profiles)
+        id: set-matrix
+        env:
+          CF_R2_ACCESS_KEY_ID: ${{ secrets.CF_R2_ACCESS_KEY_ID }}
+          CF_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_R2_SECRET_ACCESS_KEY }}
+          CF_R2_ENDPOINT_URL: ${{ secrets.CF_R2_ENDPOINT_URL }}
+          CF_R2_BUCKET_NAME: ${{ secrets.CF_R2_BUCKET_NAME }}
+        run: |
+          python r2_property_enrichment.py prepare \
+            ${{ inputs.target_date && format('--date {0}', inputs.target_date) || '' }} \
+            --out work_desc \
+            --categories "rent" \
+            --job-type description
+
+          if [ -f "work_desc/manifest.json" ]; then
+            TOTAL_JOBS=$(jq '.total_jobs' work_desc/manifest.json)
+            echo "total_jobs=$TOTAL_JOBS" >> "$GITHUB_OUTPUT"
+            if [ "$TOTAL_JOBS" -gt 0 ]; then
+              echo "has_jobs=true" >> "$GITHUB_OUTPUT"
+              echo "matrix=$(jq -c '{job_file: .jobs}' work_desc/manifest.json)" >> "$GITHUB_OUTPUT"
+            else
+              echo "has_jobs=false" >> "$GITHUB_OUTPUT"
+              echo 'matrix={"job_file":[]}' >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "has_jobs=false" >> "$GITHUB_OUTPUT"
+            echo 'matrix={"job_file":[]}' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload prepare descriptions artifact
+        if: steps.set-matrix.outputs.has_jobs == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rent-desc-work
+          path: work_desc/
+          retention-days: 1
+
+  scrape_descriptions:
+    needs: prepare_descriptions
+    if: needs.prepare_descriptions.outputs.has_jobs == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 15
+      fail-fast: false
+      matrix: ${{ fromJson(needs.prepare_descriptions.outputs.matrix) }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache Camoufox
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/camoufox
+          key: ${{ runner.os }}-camoufox
+
+      - name: Install dependencies
+        run: |
+          pip install camoufox pandas openpyxl boto3 python-dotenv
+          camoufox fetch
+
+      - name: Download desc work artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rent-desc-work
+          path: work_desc/
+
+      - name: Scrape Descriptions
+        run: |
+          JOB_FILE="work_desc/${{ matrix.job_file }}"
+          JOB_NAME=$(basename "${{ matrix.job_file }}" .json)
+          mkdir -p work_desc/results
+          python r2_property_enrichment.py scrape --job "$JOB_FILE" --output "work_desc/results/result_${JOB_NAME}.json"
+
+      - name: Upload desc result artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rent-desc-result-${{ strategy.job-index }}
+          path: work_desc/results/
+          retention-days: 1
+
+  combine_all:
+    needs: [prepare_descriptions, scrape_descriptions]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pandas openpyxl boto3 python-dotenv
+
+      - name: Download desc work artifact
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: rent-desc-work
+          path: work_desc/
+
+      - name: Download desc results
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: rent-desc-result-*
+          path: work_desc/results/
+          merge-multiple: true
+
+      - name: Combine descriptions & update final files on R2
         env:
           CF_R2_ACCESS_KEY_ID: ${{ secrets.CF_R2_ACCESS_KEY_ID }}
           CF_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_R2_SECRET_ACCESS_KEY }}
@@ -152,12 +306,5 @@ jobs:
           CF_R2_BUCKET_NAME: ${{ secrets.CF_R2_BUCKET_NAME }}
         run: |
           python r2_property_enrichment.py combine \
-            --work work \
+            --work work_desc \
             ${{ inputs.target_date && format('--date {0}', inputs.target_date) || '' }}
-
-      - name: Upload combine summary artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: property-rent-combine-summary
-          path: work/combine_summary.json
-          if-no-files-found: ignore
