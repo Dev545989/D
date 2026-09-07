@@ -74,7 +74,7 @@ jobs:
     if: needs.prepare_profiles.outputs.has_jobs == 'true'
     runs-on: ubuntu-latest
     strategy:
-      max-parallel: 15
+      max-parallel: 1
       fail-fast: false
       matrix: ${{ fromJson(needs.prepare_profiles.outputs.matrix) }}
 
@@ -223,7 +223,7 @@ jobs:
     if: needs.prepare_descriptions.outputs.has_jobs == 'true'
     runs-on: ubuntu-latest
     strategy:
-      max-parallel: 15
+      max-parallel: 2
       fail-fast: false
       matrix: ${{ fromJson(needs.prepare_descriptions.outputs.matrix) }}
 
