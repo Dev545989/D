@@ -15,7 +15,8 @@ Pipeline:
          and not already cached (deduplicated across ALL listings this run)
   2) scrape : each job item is either kind="description" (visit the listing
      page) or kind="profile" (visit the agent/agency profile page).
-  3) combine : merge new profile phones into the cached profiles-data.xlsx,
+  3) combine-profiles : merge new profile phones into profiles-data.xlsx on R2.
+  4) combine : merge new profile phones into the cached profiles-data.xlsx,
      then re-read EVERY property file for the day and, for every row, fill
      in description_full (from its own scrape result) and contact_phone_number
      (looked up from the merged profiles cache by the row's agent/agency slug)
@@ -26,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import glob
 import io
 import json
 import os
@@ -430,7 +432,7 @@ def reveal_phone_from_profile(page, timeout_ms=10000) -> tuple[str | None, str]:
 # prepare
 # --------------------------------------------------------------------------
 
-def prepare(date_str: str | None, out_dir: str, categories: str = ""):
+def prepare(date_str: str | None, out_dir: str, categories: str = "", job_type: str = "all"):
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     jobs_dir = out / "jobs"
@@ -501,22 +503,26 @@ def prepare(date_str: str | None, out_dir: str, categories: str = ""):
                                 "slug": slug,
                             }
 
-    print(f"[PREPARE] Listings needing description: {len(description_work)}")
-    print(f"[PREPARE] Unique agent/agency profiles needing phone: {len(profiles_to_scrape)}")
-
-    description_chunks = [description_work[i:i + 15] for i in range(0, len(description_work), 15)]
-    profile_chunks = [list(profiles_to_scrape.values())[i:i + 10] for i in range(0, len(profiles_to_scrape), 10)]
+    print(f"[PREPARE] Total listings needing description: {len(description_work)}")
+    print(f"[PREPARE] Total unique agent/agency profiles needing phone: {len(profiles_to_scrape)}")
 
     manifest = []
-    for idx, chunk in enumerate(description_chunks):
-        path = jobs_dir / f"desc_{idx:05d}.json"
-        path.write_text(json.dumps(chunk, ensure_ascii=False, default=str, indent=2), encoding="utf-8")
-        manifest.append(str(path.relative_to(out)))
+    description_chunks = []
+    profile_chunks = []
 
-    for idx, chunk in enumerate(profile_chunks):
-        path = jobs_dir / f"profile_{idx:05d}.json"
-        path.write_text(json.dumps(chunk, ensure_ascii=False, default=str, indent=2), encoding="utf-8")
-        manifest.append(str(path.relative_to(out)))
+    if job_type in ("all", "description"):
+        description_chunks = [description_work[i:i + 15] for i in range(0, len(description_work), 15)]
+        for idx, chunk in enumerate(description_chunks):
+            path = jobs_dir / f"desc_{idx:05d}.json"
+            path.write_text(json.dumps(chunk, ensure_ascii=False, default=str, indent=2), encoding="utf-8")
+            manifest.append(str(path.relative_to(out)))
+
+    if job_type in ("all", "profile"):
+        profile_chunks = [list(profiles_to_scrape.values())[i:i + 10] for i in range(0, len(profiles_to_scrape), 10)]
+        for idx, chunk in enumerate(profile_chunks):
+            path = jobs_dir / f"profile_{idx:05d}.json"
+            path.write_text(json.dumps(chunk, ensure_ascii=False, default=str, indent=2), encoding="utf-8")
+            manifest.append(str(path.relative_to(out)))
 
     (out / "manifest.json").write_text(
         json.dumps({
@@ -527,14 +533,14 @@ def prepare(date_str: str | None, out_dir: str, categories: str = ""):
             "profiles_key": profiles_key,
             "listing_keys": keys,
             "jobs": manifest,
-            "total_description_items": len(description_work),
-            "total_profile_items": len(profiles_to_scrape),
+            "total_description_items": len(description_work) if job_type in ("all", "description") else 0,
+            "total_profile_items": len(profiles_to_scrape) if job_type in ("all", "profile") else 0,
             "total_jobs": len(manifest),
         }, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
-    print(f"[PREPARE] Jobs: {len(manifest)} ({len(description_chunks)} description, {len(profile_chunks)} profile)")
+    print(f"[PREPARE] Jobs Generated: {len(manifest)} (job_type='{job_type}')")
     print(f"[PREPARE] Manifest: {out / 'manifest.json'}")
 
 
@@ -667,6 +673,65 @@ def _scrape_profile_item(page, item: dict) -> dict:
 
 
 # --------------------------------------------------------------------------
+# combine-profiles (NEW)
+# --------------------------------------------------------------------------
+
+def combine_profiles(results_dir: str, date_str: str | None):
+    root = Path(results_dir)
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    profiles_key = manifest["profiles_key"]
+    client = r2_client()
+
+    result_files = sorted((root / "results").glob("*.json"))
+    all_results = []
+    for path in result_files:
+        try:
+            all_results.extend(json.loads(path.read_text(encoding="utf-8")))
+        except Exception as e:
+            print(f"[WARN] Failed to read result file {path}: {e}")
+
+    new_profiles = {}
+    for r in all_results:
+        if r.get("kind") == "profile":
+            profile_type = r.get("profile_type")
+            slug = r.get("slug")
+            phone = r.get("phone")
+            if profile_type and slug and not is_empty(phone) and r.get("phone_status") == "ok":
+                new_profiles[profile_cache_key(profile_type, slug)] = {
+                    "profile_type": profile_type,
+                    "slug": slug,
+                    PHONE_COLUMN: phone,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+
+    print(f"[COMBINE-PROFILES] Found {len(new_profiles)} new profile phone numbers.")
+
+    old_profiles = read_cached_profiles(client, profiles_key)
+    merged_profiles = {}
+    for cache_key, row in old_profiles.items():
+        merged_profiles[cache_key] = {
+            "profile_type": row.get("profile_type"),
+            "slug": row.get("slug"),
+            PHONE_COLUMN: row.get(PHONE_COLUMN),
+            "updated_at": row.get("updated_at"),
+        }
+    for cache_key, row in new_profiles.items():
+        if cache_key not in merged_profiles or is_empty(merged_profiles[cache_key].get(PHONE_COLUMN)):
+            merged_profiles[cache_key] = row
+
+    profiles_df = pd.DataFrame(list(merged_profiles.values()))
+    if not profiles_df.empty:
+        profiles_df = profiles_df.drop_duplicates(subset=["profile_type", "slug"], keep="last")
+        upload_bytes(
+            client,
+            profiles_key,
+            build_excel_bytes({"profiles": profiles_df}),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        print(f"[COMBINE-PROFILES] Successfully uploaded updated profiles-data.xlsx to R2: {len(profiles_df)} total profiles")
+
+
+# --------------------------------------------------------------------------
 # combine
 # --------------------------------------------------------------------------
 
@@ -681,7 +746,10 @@ def combine(results_dir: str, date_str: str | None):
     result_files = sorted((root / "results").glob("*.json"))
     all_results = []
     for path in result_files:
-        all_results.extend(json.loads(path.read_text(encoding="utf-8")))
+        try:
+            all_results.extend(json.loads(path.read_text(encoding="utf-8")))
+        except Exception as e:
+            print(f"[WARN] Failed to read result file {path}: {e}")
 
     description_updates = {}
     new_profiles = {}
@@ -807,35 +875,48 @@ def combine(results_dir: str, date_str: str | None):
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    sub = parser.add_subparsers(dest="command", required=True)
+# --------------------------------------------------------------------------
+# CLI Entrypoint
+# --------------------------------------------------------------------------
 
-    p = sub.add_parser("prepare")
-    p.add_argument("--date", default=None, help="YYYY-MM-DD; defaults to yesterday (UTC)")
-    p.add_argument("--out", default="work")
-    p.add_argument(
-        "--categories",
-        default="",
-        help="Comma-separated category slugs to filter files by (e.g. 'residential,commercial'). Empty = no filter.",
+def main():
+    parser = argparse.ArgumentParser(description="Property Enrichment Script")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    prepare_parser = subparsers.add_parser("prepare")
+    prepare_parser.add_argument("--date", type=str, default=None)
+    prepare_parser.add_argument("--out", type=str, default="work")
+    prepare_parser.add_argument("--categories", type=str, default="")
+    prepare_parser.add_argument(
+        "--job-type", 
+        type=str, 
+        choices=["all", "profile", "description"], 
+        default="all",
+        help="Filter jobs by type: profile, description, or all"
     )
 
-    s = sub.add_parser("scrape")
-    s.add_argument("--job", required=True)
-    s.add_argument("--output", required=True)
+    scrape_parser = subparsers.add_parser("scrape")
+    scrape_parser.add_argument("--job", type=str, required=True)
+    scrape_parser.add_argument("--output", type=str, required=True)
 
-    c = sub.add_parser("combine")
-    c.add_argument("--date", default=None)
-    c.add_argument("--work", default="work")
+    combine_profiles_parser = subparsers.add_parser("combine-profiles")
+    combine_profiles_parser.add_argument("--work", type=str, required=True)
+    combine_profiles_parser.add_argument("--date", type=str, default=None)
+
+    combine_parser = subparsers.add_parser("combine")
+    combine_parser.add_argument("--work", type=str, required=True)
+    combine_parser.add_argument("--date", type=str, default=None)
 
     args = parser.parse_args()
 
     if args.command == "prepare":
-        prepare(args.date, args.out, args.categories)
+        prepare(date_str=args.date, out_dir=args.out, categories=args.categories or "", job_type=args.job_type)
     elif args.command == "scrape":
-        scrape_job(args.job, args.output)
+        scrape_job(job_file=args.job, output_file=args.output)
+    elif args.command == "combine-profiles":
+        combine_profiles(results_dir=args.work, date_str=args.date)
     elif args.command == "combine":
-        combine(args.work, args.date)
+        combine(results_dir=args.work, date_str=args.date)
 
 
 if __name__ == "__main__":
