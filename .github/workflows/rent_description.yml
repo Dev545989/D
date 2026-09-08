@@ -11,9 +11,7 @@ on:
         description: "Date to enrich (YYYY-MM-DD). Leave empty for yesterday in UTC."
         required: false
         type: string
-  schedule:
-    - cron: "0 2 * * *"  # after the rent scrapers (Rent Property / Rent Property2) should be done
-
+        
 permissions:
   contents: read
 
