@@ -844,8 +844,12 @@ def combine(results_dir: str, date_str: str | None):
                 build_excel_bytes(sheets),
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
-            json_key = key[:-5] + ".json"
-            upload_bytes(client, json_key, build_json_bytes(sheets), "application/json")
+            json_key = key.replace("/excel/", "/json/")
+            if json_key == key:
+                print(f"[WARN] Could not find '/excel/' segment in key, skipping JSON upload: {key}")
+            else:
+                json_key = json_key[:-5] + ".json"
+                upload_bytes(client, json_key, build_json_bytes(sheets), "application/json")
             changed_files += 1
             print(f"[COMBINE] Uploaded: {key}")
 
