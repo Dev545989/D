@@ -208,11 +208,27 @@ def _extract_description(page):
             continue
     return None
 
+_ILLEGAL_EXCEL_CHARS_RE = re.compile(
+    "["
+    "\x00-\x08\x0b\x0c\x0e-\x1f\x7f"   # ASCII control chars (keep \t \n \r)
+    "\ud800-\udfff"                     # lone/unpaired UTF-16 surrogates
+    "\ufffe\uffff"                      # Unicode noncharacters
+    "]"
+)
+
+
 def clean_for_excel(val):
-    """Remove control characters illegal in Excel cells."""
+    """Remove characters that are illegal in Excel/XML cells.
+
+    Covers plain ASCII control characters AND characters that are invalid in
+    well-formed XML 1.0 (lone surrogates, noncharacters) -- either kind can
+    silently corrupt the .xlsx's underlying XML and only surfaces later as an
+    'xml.etree.ElementTree.ParseError: not well-formed' when the file is
+    re-opened (e.g. during a later merge step), long after the write itself
+    appeared to succeed.
+    """
     if isinstance(val, str):
-        # Remove control chars except newline, carriage return, and tab
-        return re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', val)
+        return _ILLEGAL_EXCEL_CHARS_RE.sub('', val)
     return val
 
 def enrich_with_description(
@@ -351,7 +367,26 @@ def process_images_for_group(df: pd.DataFrame, category: str, cat0: str, workers
     return df
 
 
+def _sanitize_dataframe_for_excel(df: pd.DataFrame) -> pd.DataFrame:
+    """Apply clean_for_excel to every cell in the DataFrame. This is the
+    last line of defense before writing -- individual enrichment steps
+    (e.g. description scraping) already clean their own column, but any
+    other raw text field coming straight from the scraped JSON (title,
+    body, applicant bio, etc.) was previously written unsanitized.
+
+    No dtype filter here on purpose: newer pandas versions may infer a
+    text column as its dedicated "string" dtype instead of "object", and
+    clean_for_excel() already no-ops on non-string values, so applying it
+    unconditionally to every column is both correct and version-proof.
+    """
+    for col in df.columns:
+        df[col] = df[col].map(clean_for_excel)
+    return df
+
+
 def _write_excel_and_json(sheets: dict, xlsx_path: str, json_path: str) -> tuple:
+    sheets = {name: _sanitize_dataframe_for_excel(df.copy()) for name, df in sheets.items()}
+
     with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
         for sheet_name, df in sheets.items():
             df.to_excel(writer, sheet_name=sheet_name, index=False)
