@@ -454,6 +454,36 @@ LISTING_TYPE_PATH_FRAGMENTS = {
 }
 
 
+def find_latest_profiles_key(
+    client, listing_fragment: str, on_or_before, max_lookback_days: int = 400
+) -> tuple[str | None, Any]:
+    """Walk backward day by day from `on_or_before` (inclusive) looking for
+    the closest existing day-scoped profiles-data.xlsx for this
+    listing_fragment. Returns (key, date), or (None, None) if nothing is
+    found within max_lookback_days (e.g. the very first-ever run).
+
+    This is what makes the day-scoped cache accumulate instead of resetting:
+    each day's prepare() reads the closest earlier day's snapshot (tolerating
+    gaps, e.g. a skipped run) and combine() writes a fresh, merged snapshot
+    under *today's* own day= folder, leaving every previous day's snapshot
+    untouched as history. A cheap HEAD request per candidate day is used
+    instead of listing the whole bucket, since the answer is almost always
+    found within the first day or two looked at."""
+    for offset in range(max_lookback_days + 1):
+        candidate_date = on_or_before - timedelta(days=offset)
+        prefix = (
+            f"{DUAE_PREFIX}/year={candidate_date.year}/month={candidate_date.month:02d}/"
+            f"day={candidate_date.day:02d}/{PROPERTY_ROOT}/"
+        )
+        key = f"{prefix}{listing_fragment}/profiles-data/profiles-data.xlsx"
+        try:
+            client.head_object(Bucket=R2_BUCKET, Key=key)
+            return key, candidate_date
+        except Exception:
+            continue
+    return None, None
+
+
 def prepare(date_str: str | None, out_dir: str, listing_type: str, job_kind: str, categories: str = ""):
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -461,6 +491,7 @@ def prepare(date_str: str | None, out_dir: str, listing_type: str, job_kind: str
     jobs_dir.mkdir(exist_ok=True)
 
     date_iso, day_prefix = yesterday_prefix(date_str)
+    current_date = datetime.strptime(date_iso, "%Y-%m-%d").date()
     client = r2_client()
 
     property_prefix = f"{day_prefix}{PROPERTY_ROOT}/"
@@ -499,11 +530,27 @@ def prepare(date_str: str | None, out_dir: str, listing_type: str, job_kind: str
     # and a single shared cache file would risk a lost update if both write
     # to it around the same time. The trade-off: an agency posting both rent
     # and sale listings gets scraped once per side instead of once overall.
-    profiles_key = f"{property_prefix}{listing_fragment}/profiles-data/profiles-data.xlsx"
-    cached_profiles = read_cached_profiles(client, profiles_key) if job_kind == "phone" else {}
+    #
+    # The cache IS day-scoped (kept alongside each day's own property files,
+    # matching the rest of the data lake), but it accumulates instead of
+    # resetting: we READ the closest earlier day's snapshot
+    # (profiles_read_key, found via find_latest_profiles_key) and combine()
+    # WRITES a fresh merged snapshot under today's own day= folder
+    # (profiles_write_key). Every previous day's snapshot is left untouched.
+    profiles_write_key = f"{property_prefix}{listing_fragment}/profiles-data/profiles-data.xlsx"
+
+    profiles_read_key = None
+    read_date = None
+    cached_profiles = {}
     if job_kind == "phone":
-        print(f"[PREPARE] Profiles cache: {profiles_key}")
+        profiles_read_key, read_date = find_latest_profiles_key(client, listing_fragment, current_date)
+        cached_profiles = read_cached_profiles(client, profiles_read_key) if profiles_read_key else {}
+        if profiles_read_key:
+            print(f"[PREPARE] Profiles cache read from {read_date.isoformat()}: {profiles_read_key}")
+        else:
+            print("[PREPARE] No prior profiles cache found -- starting fresh.")
         print(f"[PREPARE] Cached profiles with phone: {len(cached_profiles)}")
+        print(f"[PREPARE] Will write updated cache to: {profiles_write_key}")
 
     description_work = []
     profiles_to_scrape: dict[str, dict] = {}
@@ -575,7 +622,8 @@ def prepare(date_str: str | None, out_dir: str, listing_type: str, job_kind: str
             "listing_type": listing_type,
             "job_kind": job_kind,
             "category_slugs": category_slugs,
-            "profiles_key": profiles_key,
+            "profiles_read_key": profiles_read_key,
+            "profiles_write_key": profiles_write_key,
             "candidate_files": sorted(candidate_files),
             "jobs": manifest,
             "total_description_items": len(description_work),
@@ -727,7 +775,8 @@ def combine(results_dir: str, date_str: str | None):
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
     date_iso = manifest["date"]
     job_kind = manifest["job_kind"]
-    profiles_key = manifest["profiles_key"]
+    profiles_read_key = manifest.get("profiles_read_key")
+    profiles_write_key = manifest.get("profiles_write_key")
     candidate_files = manifest["candidate_files"]
     client = r2_client()
 
@@ -760,8 +809,11 @@ def combine(results_dir: str, date_str: str | None):
 
     if job_kind == "phone":
         # Merge profiles cache (new phones only added, cache never loses a
-        # phone it already had).
-        old_profiles = read_cached_profiles(client, profiles_key)
+        # phone it already had). old_profiles comes from the closest earlier
+        # day's snapshot (profiles_read_key); the merged result is written
+        # fresh under *today's* own day= folder (profiles_write_key), so
+        # every previous day's snapshot stays untouched as history.
+        old_profiles = read_cached_profiles(client, profiles_read_key) if profiles_read_key else {}
         for cache_key, row in old_profiles.items():
             merged_profiles[cache_key] = {
                 "profile_type": row.get("profile_type"),
@@ -778,11 +830,11 @@ def combine(results_dir: str, date_str: str | None):
             profiles_df = profiles_df.drop_duplicates(subset=["profile_type", "slug"], keep="last")
             upload_bytes(
                 client,
-                profiles_key,
+                profiles_write_key,
                 build_excel_bytes({"profiles": profiles_df}),
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
-            print(f"[COMBINE] profiles-data: {len(profiles_df)} profiles")
+            print(f"[COMBINE] profiles-data: {len(profiles_df)} profiles -> {profiles_write_key}")
 
     # Only re-touch the files this job_kind actually flagged in prepare() --
     # not every property file for the day.
